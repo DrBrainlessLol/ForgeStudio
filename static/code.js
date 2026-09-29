@@ -785,7 +785,8 @@ function renderGit() {
   const track = (g.ahead || g.behind || g.upstream)
     ? `<div class="git-track">${g.behind ? `<span>${ic("arrow-down")} ${g.behind}</span>` : ""}${g.ahead ? `<span>${ic("arrow-up")} ${g.ahead}</span>` : ""}<span class="up">${esc(g.upstream || "no upstream")}</span></div>` : "";
   wrap.innerHTML = branchSel + track
-    + `<div class="git-commit"><textarea id="gMsg" placeholder="Message (Ctrl+Enter to commit)"></textarea>`
+    + `<div class="git-commit"><div class="git-msg-wrap"><textarea id="gMsg" placeholder="Message (Ctrl+Enter to commit)"></textarea>`
+    + `<button class="git-ai" id="gAI" title="Generate a commit message from your changes">${ic("sparkles")}</button></div>`
     + `<label class="check"><input type="checkbox" id="gAmend"> Amend last commit</label>`
     + `<button class="btn primary" id="gCommit" style="width:100%;margin-top:6px">${ic("commit")} Commit${staged.length ? "" : " All"}</button></div>`;
   wrap.append(gitSection("Staged Changes", staged, true));
@@ -813,6 +814,16 @@ function renderGit() {
   };
   $("#gCommit").onclick = commit;
   $("#gMsg").onkeydown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); commit(); } };
+  $("#gAI").onclick = act(async () => {
+    const b = $("#gAI"); b.classList.add("busy"); b.disabled = true;
+    try {
+      // use an Anthropic provider if the chat has one selected, else the computer's Claude login (fast Haiku)
+      const ch = typeof modelChoice === "function" ? modelChoice() : {};
+      const prov = (S.providers || []).find((p) => p.id === ch.provider && p.type === "anthropic");
+      const r = await api("/api/git/suggest-commit", { project: S.cur, provider: prov ? prov.id : "local" });
+      if (r.message) { $("#gMsg").value = r.message; $("#gMsg").focus(); $("#gMsg").setSelectionRange(0, 0); }
+    } finally { b.classList.remove("busy"); b.disabled = false; }
+  });
   $("#gAddRemote") && ($("#gAddRemote").onclick = () => { const url = $("#gRemote").value.trim(); if (url) gitDo("remote", { url }); });
 }
 function gitSection(title, files, staged) {

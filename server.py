@@ -1673,6 +1673,43 @@ def git_net(root, *args):
     return text or "Done"
 
 
+def suggest_commit(project, prof, provider_id=None, model=None):
+    """Draft a commit message from the current staged + unstaged changes using the model."""
+    root = project_root(project)
+    if git_prefix(root) is None:
+        raise ValueError("This project isn't a git repository yet")
+    staged = git(root, "diff", "--cached", check=False).stdout
+    unstaged = git(root, "diff", check=False).stdout
+    untracked = [p for p in git(root, "ls-files", "--others", "--exclude-standard", check=False).stdout.splitlines() if p]
+    diff = ""
+    if staged:
+        diff += "# Staged changes\n" + staged + "\n"
+    if unstaged:
+        diff += "# Unstaged changes\n" + unstaged + "\n"
+    if untracked:
+        diff += "# New untracked files:\n" + "\n".join(untracked[:60]) + "\n"
+    diff = diff.strip()
+    if not diff:
+        raise ValueError("No changes to describe — edit or stage some files first.")
+    prompt = ("Write a git commit message for the following changes. Use the imperative mood. "
+              "First line: a concise summary under 72 characters (a conventional-commit prefix such as "
+              "feat:/fix:/refactor:/docs: is welcome when it fits). If it helps, add a blank line then "
+              "1–4 short bullet points. Output ONLY the commit message — no code fences, quotes or preamble.\n\n"
+              "Changes:\n```diff\n" + diff[:12000] + "\n```")
+    claude = shutil.which("claude", path=tool_env()["PATH"])
+    if not claude:
+        raise ValueError("The `claude` CLI is needed to generate commit messages.")
+    prov = prof.provider(provider_id) if provider_id and provider_id != "local" else None
+    r = subprocess.run([claude, "-p", prompt, "--model", model or "haiku"], cwd=project,
+                       env=provider_env(prov), capture_output=True, text=True, errors="replace", timeout=90)
+    if r.returncode != 0:
+        raise ValueError((r.stderr or "Could not generate a message").strip()[:300])
+    msg = re.sub(r"^\s*```[a-zA-Z]*\n?|\n?```\s*$", "", r.stdout.strip()).strip().strip('"').strip()
+    if not msg:
+        raise ValueError("The model returned an empty message — try again.")
+    return {"message": msg[:2000]}
+
+
 def clone_repo(url, parent, name=None):
     url = (url or "").strip()
     if not url or url.startswith("-"):
@@ -2116,6 +2153,8 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/git/"):
             if path == "/api/git/clone":
                 return clone_repo(b.get("url"), b.get("parent"), b.get("name"))
+            if path == "/api/git/suggest-commit":
+                return suggest_commit(project, prof, b.get("provider"), b.get("model"))
             return git_action(project, path.rsplit("/", 1)[1], b)
         if path == "/api/projects/new":
             return new_project(b.get("parent"), b.get("name"), b.get("git"))
