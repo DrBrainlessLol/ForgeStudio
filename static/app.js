@@ -606,17 +606,27 @@ async function showLogin() {
   $("#btnGoogle").hidden = !d.google;
   $("#btnGoogleSetup").textContent = d.google ? "Change Google sign-in setup" : "Set up Google sign-in";
   const list = $("#profileList");
-  list.innerHTML = d.profiles.length ? "" : '<p class="dim">No profiles yet — create one below.</p>';
-  for (const p of d.profiles) {
+  list.innerHTML = "";
+  const tests = d.profiles.filter((p) => p.test);
+  const shown = d.hideTest && !S.revealTest ? d.profiles.filter((p) => !p.test) : d.profiles;
+  if (!shown.length && !tests.length) list.innerHTML = '<p class="dim">No profiles yet — create one below.</p>';
+  const addBtn = (p) => {
     const b = document.createElement("button");
     b.type = "button"; b.className = "profile-item";
-    b.innerHTML = `<span class="avatar">${avatarHtml(p)}</span><span class="grow"><b>${esc(p.name)}</b><br><span class="dim">${p.kind === "google" ? esc(p.email || "Google") : p.hasPin ? "PIN protected" : "Local profile"}</span></span>${p.hasPin ? ic("lock") : ""}`;
+    b.innerHTML = `<span class="avatar">${avatarHtml(p)}</span><span class="grow"><b>${esc(p.name)}${p.test ? ' <span class="badge">test</span>' : ""}</b><br><span class="dim">${p.kind === "google" ? esc(p.email || "Google") : p.hasPin ? "PIN protected" : "Local profile"}</span></span>${p.hasPin ? ic("lock") : ""}`;
     b.onclick = act(async () => {
       if (p.kind === "google") return googleSignIn();
       if (p.hasPin) { S.pinFor = p; $("#pinName").textContent = p.name; $("#loginMain").hidden = true; $("#pinForm").hidden = false; $("#pinInput").value = ""; $("#pinInput").focus(); return; }
       finishLogin((await authPost("/api/auth/login", { id: p.id })).login);
     });
     list.append(b);
+  };
+  shown.forEach(addBtn);
+  if (d.hideTest && tests.length && !S.revealTest) {
+    const link = document.createElement("button");
+    link.type = "button"; link.className = "link"; link.textContent = `Show ${tests.length} test profile${tests.length > 1 ? "s" : ""}`;
+    link.onclick = () => { S.revealTest = true; S.loginShown = false; showLogin(); };
+    list.append(link);
   }
 }
 async function authPost(path, body) {
@@ -662,6 +672,7 @@ function openSettings(sec = "general") {
   $$("#swatches .swatch").forEach((b) => (b.onclick = () => setPref({ accent: b.dataset.accent })));
   applyAppearance(S.prefs);
   $("#setMode").value = S.prefs.mode || "ask";
+  $("#setHideTest").checked = !!S.settings?.hideTest;
   fillProfile(); renderAgentList(); renderProviders(); renderWeb();
   $("#setStudio").value = S.settings?.studio_path || "";
   const t = S.tools;
@@ -680,12 +691,14 @@ $("#btnProfile").onclick = () => openSettings("profile");
 $$("#themeSeg button").forEach((b) => (b.onclick = () => setPref({ theme: b.dataset.theme })));
 $$("#densitySeg button").forEach((b) => (b.onclick = () => setPref({ density: b.dataset.density })));
 $("#setMode").onchange = () => { setPref({ mode: $("#setMode").value }); $("#mode").value = $("#setMode").value; };
+$("#setHideTest").onchange = act(async () => { await api("/api/settings", { hideTest: $("#setHideTest").checked }); S.settings.hideTest = $("#setHideTest").checked; toast($("#setHideTest").checked ? "Test profiles will be hidden on the sign-in screen" : "Test profiles will be shown"); });
 
 function fillProfile() {
   const p = S.profile;
   $("#pfAvatar").innerHTML = avatarHtml(p); $("#pfTitle").textContent = p.name;
   $("#pfSub").textContent = p.kind === "google" ? `Google · ${p.email}` : p.hasPin ? "Local profile · PIN protected" : "Local profile · no PIN";
   $("#pfName").value = p.name; $("#pfPin").value = "";
+  $("#pfTest").checked = !!p.test;
   $("#pfPinRow").hidden = p.kind === "google";
   $("#pfPin").placeholder = p.hasPin ? "•••• (type to change, clear to remove)" : "No PIN";
   $("#pfInfo").textContent = p.kind === "google" ? "Your Google account protects this profile." : "A PIN stops other people on this computer (or your network) from opening your profile.";
@@ -694,7 +707,7 @@ function fillProfile() {
   $("#setGoogleState").innerHTML = g ? `Configured (client ${esc(g.slice(0, 12))}…). To change it, sign out and use “Change Google sign-in setup”.` : "Not set up. Sign out and choose “Set up Google sign-in” on the sign-in screen.";
 }
 $("#pfSave").onclick = act(async () => {
-  const body = { name: $("#pfName").value };
+  const body = { name: $("#pfName").value, test: $("#pfTest").checked };
   if (S.profile.kind !== "google" && ($("#pfPin").value || $("#pfPin").dataset.clear)) body.pin = $("#pfPin").value;
   S.profile = await api("/api/profile", body); renderProfile(); fillProfile(); toast("Profile saved");
 });

@@ -108,7 +108,7 @@ def check_pin(pin, stored):
 def public_profile(pid):
     p = CONFIG["profiles"][pid]
     return {"id": pid, "name": p["name"], "email": p.get("email"), "picture": p.get("picture"),
-            "kind": p["kind"], "hasPin": bool(p.get("pin"))}
+            "kind": p["kind"], "hasPin": bool(p.get("pin")), "test": bool(p.get("test"))}
 
 
 def create_profile(name, kind, **extra):
@@ -1871,7 +1871,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/api/auth/profiles":
                 return self._send(200, {"profiles": [public_profile(p) for p in CONFIG["profiles"]],
-                                        "google": bool(google_cfg()), "redirect": ORIGIN})
+                                        "google": bool(google_cfg()), "redirect": ORIGIN,
+                                        "hideTest": bool(CONFIG["settings"].get("hideTest"))})
             pid = login_profile(self.headers.get("X-Login") or qs.get("login", [""])[0])
             if not pid:
                 return self._send(401, {"error": "login required", "login": True})
@@ -1965,6 +1966,7 @@ class Handler(BaseHTTPRequestHandler):
             "procs": [{"id": r["id"], "kind": r["kind"], "project": r["project"], "label": r["label"],
                        "running": r["popen"].poll() is None, "meta": r["meta"]} for r in PROCS.values()],
             "settings": {"studio_path": CONFIG["settings"].get("studio_path"),
+                         "hideTest": bool(CONFIG["settings"].get("hideTest")),
                          "google": {"clientId": (CONFIG["settings"].get("google") or {}).get("clientId", "")}},
         }
 
@@ -2043,6 +2045,8 @@ class Handler(BaseHTTPRequestHandler):
                     p["pin"] = hash_pin(b["pin"])
                 else:
                     p.pop("pin", None)
+            if "test" in b:
+                p["test"] = bool(b["test"])
             save_config()
             return public_profile(prof.pid)
         if path == "/api/profile/delete":
@@ -2094,6 +2098,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/settings":
             if "studio_path" in b:
                 CONFIG["settings"]["studio_path"] = b["studio_path"] or None
+            if "hideTest" in b:
+                CONFIG["settings"]["hideTest"] = bool(b["hideTest"])
             save_config()
             return None
         # ---- chats
