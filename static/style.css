@@ -232,14 +232,27 @@ input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; m
 .dl { display: inline-flex; vertical-align: -2px; margin-left: 4px; color: var(--accent); }
 .dl .ic { width: 13px; height: 13px; }
 .tool { border: 0.5px solid var(--line); border-radius: 9px; background: var(--surface); font-size: .95em; }
-.tool summary { padding: 6px 10px; cursor: default; display: flex; gap: 8px; align-items: center; list-style: none; }
+.tool summary { padding: 6px 10px; cursor: pointer; display: flex; gap: 8px; align-items: center; list-style: none; }
 .tool summary::-webkit-details-marker { display: none; }
+.tool summary::before { content: ""; width: 8px; height: 8px; flex: none; border-right: 1.5px solid var(--faint); border-bottom: 1.5px solid var(--faint); transform: rotate(-45deg); transition: transform .12s; margin-right: 2px; }
+.tool[open] summary::before { transform: rotate(45deg); }
+.tool summary:hover { background: var(--hover); border-radius: 9px 9px 0 0; }
 .tool .tname { font-weight: 600; }
 .tool .targ { font-family: var(--mono); font-size: .92em; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .tool .tstate { font-size: .85em; color: var(--dim); display: inline-flex; align-items: center; gap: 4px; }
 .tool .tstate::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .tool .tstate.run { color: var(--accent); } .tool .tstate.ok { color: var(--ok); } .tool .tstate.err { color: var(--err); }
 .tool pre { margin: 0 8px 8px; max-height: 320px; }
+.tsec { margin: 0 8px 8px; }
+.tsec-h { display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); padding: 4px 2px; }
+.tsec-h .tcopy { width: 22px; height: 22px; border: 0; background: transparent; border-radius: 5px; color: var(--dim); display: grid; place-items: center; cursor: pointer; }
+.tsec-h .tcopy:hover { background: var(--hover); color: var(--text); }
+.tsec-h .tcopy .ic { width: 13px; height: 13px; }
+.tsec pre { margin: 0; }
+.tsec pre.t-cmd { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--info); }
+.tsec pre.t-out { max-height: 55vh; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tsec pre.t-in { max-height: 55vh; }
+.tdesc { margin: 0 8px 8px; font-size: .92em; color: var(--dim); }
 .tool-actions { display: flex; gap: 4px; }
 .tool-actions a { display: inline-flex; align-items: center; gap: 4px; font-size: .9em; text-decoration: none; padding: 2px 7px; border-radius: 5px; color: var(--accent); }
 .tool-actions a:hover { background: var(--accent-soft); }

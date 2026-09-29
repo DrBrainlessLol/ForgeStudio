@@ -134,6 +134,23 @@ function toolArg(input = {}) {
     input.description || input.skill || (Object.keys(input).length ? JSON.stringify(input) : "");
 }
 const FILE_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+function toolSection(label, cls, text) {
+  return `<div class="tsec"><div class="tsec-h"><span>${esc(label)}</span><button class="tcopy" title="Copy">${ic("copy")}</button></div><pre class="${cls}">${esc(text)}</pre></div>`;
+}
+function toolBody(it) {
+  let h = "";
+  if (it.name === "Bash" && it.input?.command != null) {
+    h += toolSection("Command", "t-cmd", it.input.command);
+    if (it.input.description) h += `<div class="tdesc">${esc(it.input.description)}</div>`;
+  } else if (it.input && (it.input.old_string != null || it.input.content != null)) {
+    h += toolSection(it.input.content != null ? "New content" : "Change", "t-in",
+      it.input.content ?? `- ${it.input.old_string}\n+ ${it.input.new_string}`);
+  } else if (it.input && Object.keys(it.input).length) {
+    h += toolSection("Input", "t-in", JSON.stringify(it.input, null, 2));
+  }
+  if (it.result != null) h += toolSection(it.error ? "Error output" : "Output", "t-out", it.result || "(no output)");
+  return h;
+}
 function renderItem(it) {
   let el;
   if (it.k === "user") {
@@ -149,16 +166,20 @@ function renderItem(it) {
   } else if (it.k === "text") { el = document.createElement("div"); el.className = "msg assistant" + (it.sub ? " sub" : ""); el.innerHTML = md(it.text); }
   else if (it.k === "tool") {
     el = document.createElement("details"); el.className = "tool";
+    if (it._open) el.open = true;
     const state = it.result == null ? ["run", "running"] : it.error ? ["err", "error"] : ["ok", "done"];
-    const inputStr = it.input && (it.input.old_string != null || it.input.content != null)
-      ? (it.input.content ?? `- ${it.input.old_string}\n+ ${it.input.new_string}`) : JSON.stringify(it.input, null, 2);
     const fp = FILE_TOOLS.includes(it.name) && it.input?.file_path;
     const inProj = fp && S.cur && (fp === S.cur || fp.startsWith(S.cur + "/") || !fp.startsWith("/"));
     const actions = fp && it.result != null && !it.error
       ? `<span class="tool-actions">${inProj ? `<a data-edit>${ic("code")}Edit</a>` : ""}<a href="${fileUrl(fp)}" target="_blank" onclick="event.stopPropagation()">${ic("external")}Open</a><a href="${fileUrl(fp, true)}" onclick="event.stopPropagation()">${ic("download")}Download</a></span>` : "";
-    el.innerHTML = `<summary><span class="tname">${esc(it.name)}</span><span class="targ">${esc(toolArg(it.input))}</span>${actions}<span class="tstate ${state[0]}">${state[1]}</span></summary>
-      <pre>${esc(inputStr)}</pre>${it.result != null ? `<pre>${esc(it.result || "(no output)")}</pre>` : ""}`;
+    el.innerHTML = `<summary><span class="tname">${esc(it.name)}</span><span class="targ">${esc(toolArg(it.input))}</span>${actions}<span class="tstate ${state[0]}">${state[1]}</span></summary>${toolBody(it)}`;
+    el.ontoggle = () => (it._open = el.open);
     el.querySelector("[data-edit]")?.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); if (typeof openInEditor === "function") openInEditor(fp); });
+    el.querySelectorAll(".tcopy").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation(); e.preventDefault();
+      const pre = b.closest(".tsec").querySelector("pre");
+      navigator.clipboard.writeText(pre.textContent).then(() => toast("Copied")).catch(() => toast("Copy failed", true));
+    }));
   } else if (it.k === "approval") el = renderApproval(it);
   else if (it.k === "meta") { el = document.createElement("div"); el.className = "meta" + (it.err ? " err" : ""); el.textContent = it.text; }
   it.el = el;

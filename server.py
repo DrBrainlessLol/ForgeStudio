@@ -739,7 +739,7 @@ class Run:
                     self.event({"type": "text", "text": item["text"], "sub": True})
                 elif it == "command_execution":
                     self.event({"type": "tools", "blocks": [{"id": item["id"], "name": "Shell", "input": {"command": item.get("command")}}], "sub": False})
-                    self.event({"type": "tool_results", "results": [{"id": item["id"], "content": (item.get("aggregated_output") or "")[:6000],
+                    self.event({"type": "tool_results", "results": [{"id": item["id"], "content": clip(item.get("aggregated_output") or ""),
                                                                       "error": (item.get("exit_code") or 0) != 0}]})
                 elif it == "file_change":
                     for i, ch in enumerate(item.get("changes", [])):
@@ -841,7 +841,7 @@ class Run:
                 r = subprocess.run(inp["command"], shell=True, cwd=self.project, env=tool_env(),
                                    capture_output=True, text=True, errors="replace", timeout=int(inp.get("timeout", 120)))
                 out = (r.stdout + r.stderr).strip()
-                return (out or "(no output)")[:16000], r.returncode != 0
+                return clip(out or "(no output)"), r.returncode != 0
             return f"Unknown tool {tool}", True
         except subprocess.TimeoutExpired:
             return "Command timed out", True
@@ -1089,6 +1089,14 @@ def start_chat(prof: Profile, project, prompt, chat_id=None, model=None, mode="a
     return chat_id
 
 
+TOOL_OUT_LIMIT = 60000  # keep tool output readable in the chat without unbounded log growth
+
+
+def clip(s, n=TOOL_OUT_LIMIT):
+    s = str(s)
+    return s if len(s) <= n else s[:n] + f"\n… (+{len(s) - n:,} more characters — truncated)"
+
+
 def slim_event(ev):
     t = ev.get("type")
     sub = bool(ev.get("parent_tool_use_id"))
@@ -1111,7 +1119,7 @@ def slim_event(ev):
                 c = b.get("content")
                 if isinstance(c, list):
                     c = "\n".join(x.get("text", "") for x in c if isinstance(x, dict))
-                out.append({"id": b.get("tool_use_id"), "content": str(c)[:6000], "error": b.get("is_error", False)})
+                out.append({"id": b.get("tool_use_id"), "content": clip(c), "error": b.get("is_error", False)})
         return {"type": "tool_results", "results": out} if out else None
     if t == "system" and ev.get("subtype") == "api_retry":
         return {"type": "retry", "attempt": ev.get("attempt"), "max": ev.get("max_retries"),
