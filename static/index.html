@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Forge Studio</title>
+<link rel="icon" href="icon.svg">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+<script>
+  // apply the saved theme before first paint (no flash)
+  try {
+    const t = JSON.parse(localStorage.getItem("fs:theme") || "null") || { theme: "dark", accent: "#0A84FF" };
+    document.documentElement.dataset.theme = t.theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : t.theme;
+    document.documentElement.style.setProperty("--accent", t.accent);
+  } catch {}
+</script>
+</head>
+<body>
+<div id="sprite" hidden></div>
+
+<!-- ============ SIGN IN ============ -->
+<div class="login" id="login" hidden>
+  <div class="login-card">
+    <img class="login-logo" src="icon.svg" alt="">
+    <h1>Forge Studio</h1>
+    <p class="dim">Sign in to keep your chats, history and keys separate from other people using this computer.</p>
+
+    <form id="tokenGate" hidden class="left">
+      <p class="dim">This device needs the access token. On the computer running Forge Studio, open <b>Settings → Web App</b> and copy the token or the full link, then paste it here.</p>
+      <label class="field">Access token or link<input id="tokenInput" placeholder="paste token or http://…#token=…" autocomplete="off"></label>
+      <div class="row end"><button class="btn primary" type="submit">Continue</button></div>
+    </form>
+
+    <div id="loginMain">
+      <button class="btn google-btn" id="btnGoogle"><svg class="ic"><use href="#i-google"/></svg> Continue with Google</button>
+      <div class="sep"><span>or choose a profile</span></div>
+      <div id="profileList" class="profile-list"></div>
+      <form class="new-profile" id="newLocal">
+        <input id="newName" placeholder="New profile name" maxlength="40" autocomplete="off">
+        <input id="newPin" type="password" inputmode="numeric" placeholder="PIN (optional)" maxlength="12" autocomplete="new-password">
+        <button class="btn primary" type="submit">Create</button>
+      </form>
+      <button class="link" id="btnGoogleSetup">Set up Google sign-in</button>
+    </div>
+
+    <form id="pinForm" hidden>
+      <p>Enter the PIN for <b id="pinName"></b></p>
+      <div class="row"><input id="pinInput" type="password" inputmode="numeric" class="grow" autocomplete="off"><button class="btn primary" type="submit">Unlock</button></div>
+      <button type="button" class="link" id="pinBack">Back</button>
+    </form>
+
+    <form id="googleSetup" hidden class="left">
+      <h3>Google sign-in setup</h3>
+      <ol class="dim steps">
+        <li>Open <b>console.cloud.google.com</b> and create or pick a project.</li>
+        <li><b>APIs &amp; Services → OAuth consent screen</b>: choose <i>External</i>, enter an app name and your email, and add everyone who will sign in as a <i>Test user</i>.</li>
+        <li><b>Credentials → Create credentials → OAuth client ID</b>, application type <b>Desktop app</b>.</li>
+        <li>Paste the Client ID and Client secret below.</li>
+      </ol>
+      <label class="field">Client ID<input id="gClientId" placeholder="1234-abc.apps.googleusercontent.com"></label>
+      <label class="field">Client secret<input id="gSecret" type="password" placeholder="GOCSPX-…"></label>
+      <div class="row end"><button type="button" class="btn" id="gCancel">Cancel</button><button class="btn primary" type="submit">Save</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ WINDOW ============ -->
+<header class="titlebar">
+  <button class="tb-btn" id="btnSidebar" title="Show / hide sidebar"><svg class="ic"><use href="#i-sidebar"/></svg></button>
+  <div class="tb-title"><img src="icon.svg" alt=""><span>Forge Studio</span><span class="crumb" id="crumb"></span></div>
+  <div class="spacer"></div>
+  <span class="conn" id="conn" title="Server connection"></span>
+  <button class="tb-btn" id="btnSettings" title="Settings"><svg class="ic"><use href="#i-settings"/></svg></button>
+  <button class="tb-profile" id="btnProfile" title="Profile"><span class="avatar" id="avatar"></span><span id="profileName"></span></button>
+</header>
+
+<div class="layout" id="layout">
+  <aside class="sidebar">
+    <div class="side-search"><svg class="ic"><use href="#i-search"/></svg><input id="projFilter" placeholder="Search"></div>
+    <div class="side-section"><span>Projects</span><button class="icon-btn" id="btnAdd" title="Add a project folder"><svg class="ic"><use href="#i-plus"/></svg></button></div>
+    <ul id="projList" class="source-list"></ul>
+    <details class="side-status">
+      <summary>System</summary>
+      <div id="toolStatus"></div>
+    </details>
+  </aside>
+
+  <main class="work">
+    <section class="chat" id="chatPane">
+      <div class="pane-head">
+        <button class="btn plain" id="btnHistory" title="Chat history"><svg class="ic"><use href="#i-history"/></svg><span id="chatTitle">New chat</span><svg class="ic chev"><use href="#i-chevron"/></svg></button>
+        <div class="spacer"></div>
+        <span class="agent-pill" id="agentPill" hidden></span>
+        <button class="icon-btn" id="btnNew" title="New chat"><svg class="ic"><use href="#i-chat-plus"/></svg></button>
+        <button class="icon-btn" id="btnTogglePanel" title="Show / hide the side panel"><svg class="ic"><use href="#i-sidebar"/></svg></button>
+      </div>
+      <div class="history" id="historyPanel" hidden>
+        <ul id="historyList"></ul>
+      </div>
+      <div class="messages" id="messages"></div>
+      <form class="composer" id="composer">
+        <div class="drop-hint" id="dropHint">Drop files to attach</div>
+        <div class="attachments" id="attachments" hidden></div>
+        <textarea id="prompt" rows="3" placeholder="Message the agent — attach images or files with the clip, paste, or drag &amp; drop"></textarea>
+        <div class="composer-bar">
+          <button type="button" class="icon-btn" id="btnAttach" title="Attach images or files"><svg class="ic"><use href="#i-paperclip"/></svg></button>
+          <input type="file" id="fileInput" multiple hidden>
+          <select id="agent" title="Agent CLI"></select>
+          <select id="model" title="Model"></select>
+          <input id="customModel" placeholder="model id" size="14" hidden>
+          <select id="mode" title="What the agent may do without asking you">
+            <option value="ask">Ask before acting</option>
+            <option value="acceptEdits">Auto-edit, ask for commands</option>
+            <option value="auto">Auto (asks only when unsure)</option>
+            <option value="bypassPermissions">Full access — never ask</option>
+            <option value="plan">Plan only (read-only)</option>
+          </select>
+          <div class="spacer"></div>
+          <button type="button" class="btn danger" id="btnStop" hidden><svg class="ic"><use href="#i-stop"/></svg> Stop</button>
+          <button type="submit" class="btn primary send" id="btnSend" title="Send (Enter)"><svg class="ic"><use href="#i-send"/></svg></button>
+        </div>
+      </form>
+    </section>
+
+    <div class="resizer" id="resizer"></div>
+
+    <section class="panel" id="panel">
+      <div class="pane-head center">
+        <nav class="segmented tabs">
+          <button data-tab="code"><svg class="ic"><use href="#i-code"/></svg> Code</button>
+          <button data-tab="preview" class="active"><svg class="ic"><use href="#i-globe"/></svg> Preview</button>
+          <button data-tab="android"><svg class="ic"><use href="#i-phone"/></svg> Android</button>
+          <button data-tab="procs"><svg class="ic"><use href="#i-terminal"/></svg> Processes</button>
+        </nav>
+      </div>
+
+      <!-- CODE -->
+      <div class="tab" id="tab-code" hidden>
+        <div class="code-wrap" id="codeWrap">
+          <aside class="code-side" id="codeSide">
+            <nav class="code-rail">
+              <button data-view="files" class="active" title="Explorer (Ctrl+Shift+E)"><svg class="ic"><use href="#i-files"/></svg></button>
+              <button data-view="search" title="Search in files (Ctrl+Shift+F)"><svg class="ic"><use href="#i-search"/></svg></button>
+              <button data-view="git" title="Source control (Ctrl+Shift+G)"><svg class="ic"><use href="#i-branch"/></svg><span class="rail-badge" id="gitBadge" hidden></span></button>
+              <div class="spacer"></div>
+              <button id="btnCodeSide" title="Hide file panel"><svg class="ic"><use href="#i-sidebar"/></svg></button>
+            </nav>
+            <section class="code-view" data-view="files">
+              <div class="cv-head"><span id="treeTitle">Explorer</span><div class="spacer"></div>
+                <button class="icon-btn" id="btnNewFile" title="New file"><svg class="ic"><use href="#i-file-plus"/></svg></button>
+                <button class="icon-btn" id="btnNewFolder" title="New folder"><svg class="ic"><use href="#i-folder-plus"/></svg></button>
+                <button class="icon-btn" id="btnTreeRefresh" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
+                <button class="icon-btn" id="btnTreeCollapse" title="Collapse folders"><svg class="ic"><use href="#i-collapse"/></svg></button>
+              </div>
+              <ul class="tree" id="tree"></ul>
+            </section>
+            <section class="code-view" data-view="search" hidden>
+              <div class="cv-head"><span>Search</span></div>
+              <div class="cv-pad">
+                <div class="search big"><svg class="ic"><use href="#i-search"/></svg><input id="codeQ" placeholder="Search in files" autocomplete="off">
+                  <button class="tog" id="qCase" title="Match case">Aa</button><button class="tog" id="qRegex" title="Regular expression">.*</button></div>
+              </div>
+              <div class="dim cv-pad small-text" id="searchInfo"></div>
+              <ul class="results" id="searchResults"></ul>
+            </section>
+            <section class="code-view" data-view="git" hidden>
+              <div class="cv-head"><span>Source Control</span><div class="spacer"></div>
+                <button class="icon-btn" id="btnGitPull" title="Pull"><svg class="ic"><use href="#i-arrow-down"/></svg></button>
+                <button class="icon-btn" id="btnGitPush" title="Push"><svg class="ic"><use href="#i-arrow-up"/></svg></button>
+                <button class="icon-btn" id="btnGitRefresh" title="Refresh (also fetches)"><svg class="ic"><use href="#i-refresh"/></svg></button>
+              </div>
+              <div class="git-body" id="gitBody"></div>
+            </section>
+          </aside>
+          <div class="code-resizer" id="codeResizer"></div>
+          <div class="editor-col">
+            <div class="ed-tabs-row">
+              <div class="ed-tabs" id="edTabs"></div>
+              <button class="icon-btn" id="btnShowSide" title="Show file panel" hidden><svg class="ic"><use href="#i-sidebar"/></svg></button>
+              <button class="btn small plain" id="btnEdAsk" title="Send the file or selection to the agent"><svg class="ic"><use href="#i-sparkles"/></svg> Ask agent</button>
+              <button class="icon-btn" id="btnEdSave" title="Save (Ctrl+S)"><svg class="ic"><use href="#i-save"/></svg></button>
+            </div>
+            <div class="ed-crumbs" id="edCrumbs"></div>
+            <div class="ed-body" id="edBody"></div>
+            <div class="ed-status" id="edStatus"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PREVIEW -->
+      <div class="tab" id="tab-preview">
+        <div class="toolbar">
+          <select id="webRoot" title="Folder to serve"></select>
+          <input id="devCmd" class="mono grow" placeholder="Dev command (blank = static server)" title="Command that starts your dev server">
+          <button class="btn primary" id="btnPrevStart"><svg class="ic"><use href="#i-play"/></svg> Start</button>
+          <button class="btn" id="btnPrevStop" hidden><svg class="ic"><use href="#i-stop"/></svg> Stop</button>
+        </div>
+        <div class="toolbar">
+          <div class="urlbar grow"><svg class="ic"><use href="#i-globe"/></svg><input id="prevUrl" placeholder="http://127.0.0.1:3000"></div>
+          <button class="icon-btn" id="btnReload" title="Reload"><svg class="ic"><use href="#i-refresh"/></svg></button>
+          <label class="check" title="Reload when files change (static server) — dev servers use their own hot reload"><input type="checkbox" id="autoReload" checked> Live reload</label>
+          <select id="device">
+            <option value="fill">Responsive</option>
+            <option value="1440x900">Desktop 1440</option>
+            <option value="1024x768">Laptop 1024</option>
+            <option value="820x1180">Tablet</option>
+            <option value="412x915">Android phone</option>
+            <option value="390x844">iPhone</option>
+            <option value="360x640">Small phone</option>
+          </select>
+          <button class="icon-btn" id="btnRotate" title="Rotate"><svg class="ic"><use href="#i-rotate"/></svg></button>
+          <button class="icon-btn" id="btnExt" title="Open in browser"><svg class="ic"><use href="#i-external"/></svg></button>
+        </div>
+        <div class="stage" id="stage">
+          <div class="frame" id="frame"><iframe id="iframe" title="Preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"></iframe></div>
+          <div class="stage-empty" id="stageEmpty"><svg class="ic big"><use href="#i-globe"/></svg><span>Start a dev server or enter a URL to preview your site.</span></div>
+        </div>
+        <details class="logbox" id="prevLogBox"><summary>Server log</summary><pre id="prevLog"></pre></details>
+      </div>
+
+      <!-- ANDROID -->
+      <div class="tab scroll" id="tab-android" hidden>
+        <p class="dim note">Android Studio doesn't need to be open — builds run through Gradle and your phone is reached with adb.</p>
+        <div class="cards">
+          <div class="group">
+            <h3>Device</h3>
+            <div class="row">
+              <select id="deviceSel" class="grow"></select>
+              <button class="icon-btn" id="btnDevRefresh" title="Refresh devices"><svg class="ic"><use href="#i-refresh"/></svg></button>
+            </div>
+            <div class="warnbox" id="devHint" hidden></div>
+            <div class="row" id="avdRow" hidden>
+              <select id="avdSel" class="grow"></select>
+              <button class="btn" id="btnAvd"><svg class="ic"><use href="#i-monitor"/></svg> Launch emulator</button>
+            </div>
+            <details class="disclosure">
+              <summary>Connect over Wi-Fi</summary>
+              <p class="dim">On the phone: Developer options → Wireless debugging. Use “Pair device with pairing code” the first time, then connect with the IP:port shown on the main screen.</p>
+              <div class="row"><input id="wifiAddr" placeholder="192.168.1.20:37123" class="grow"><input id="wifiCode" placeholder="Pair code" size="9"><button class="btn" id="btnWifi">Connect</button></div>
+            </details>
+            <details class="disclosure">
+              <summary>Reach a local dev server from the device</summary>
+              <p class="dim">Forwards the phone's localhost:PORT to this computer (adb reverse), so a WebView or API client in your app can load your preview server.</p>
+              <div class="row"><input id="revPort" placeholder="3000" size="8"><button class="btn" id="btnReverse">Forward port</button></div>
+            </details>
+          </div>
+
+          <div class="group" id="androidProj">
+            <h3>App</h3>
+            <div id="androidInfo" class="dim"></div>
+            <div class="row" id="moduleRow">
+              <label class="dim">Module</label><select id="moduleSel" class="grow"></select>
+            </div>
+            <div class="row wrap">
+              <button class="btn primary" id="btnRun"><svg class="ic"><use href="#i-play"/></svg> Run app</button>
+              <button class="btn" id="btnRestart" title="Force-stop and relaunch without rebuilding"><svg class="ic"><use href="#i-restart"/></svg> Restart</button>
+              <button class="btn" id="btnStopApp"><svg class="ic"><use href="#i-stop"/></svg> Stop</button>
+              <button class="btn" id="btnBuild"><svg class="ic"><use href="#i-package"/></svg> Build APK</button>
+              <button class="btn" id="btnStudio"><svg class="ic"><use href="#i-code"/></svg> Android Studio</button>
+            </div>
+            <div class="row">
+              <input id="gradleTask" class="mono grow" placeholder="Gradle task, e.g. clean or :app:assembleRelease">
+              <button class="btn" id="btnTask">Run task</button>
+            </div>
+          </div>
+        </div>
+
+        <section class="group live" id="live">
+          <div class="live-head">
+            <h3>Live debug</h3>
+            <span class="dim">Use the app on the phone (or in the screen view) and watch its log at the same time.</span>
+          </div>
+          <div class="live-grid">
+            <div class="screen-col">
+              <div class="row wrap">
+                <button class="btn primary small" id="btnMirror"><svg class="ic"><use href="#i-cast"/></svg> Show screen</button>
+                <button class="btn small" id="btnScrcpy" title="Smooth, real-time mirror in its own window (scrcpy)"><svg class="ic"><use href="#i-external"/></svg> Smooth window</button>
+                <button class="icon-btn" id="btnShot" title="Screenshot"><svg class="ic"><use href="#i-camera"/></svg></button>
+                <span class="dim" id="mirrorStat"></span>
+              </div>
+              <div class="mirror-wrap" id="mirrorWrap" hidden>
+                <div class="mirror-screen"><img id="mirrorImg" alt="Device screen" draggable="false"></div>
+                <div class="mirror-keys">
+                  <button class="icon-btn" id="kBack" title="Back"><svg class="ic"><use href="#i-back"/></svg></button>
+                  <button class="icon-btn" id="kHome" title="Home"><svg class="ic"><use href="#i-home"/></svg></button>
+                  <button class="icon-btn" id="kRecents" title="Recent apps"><svg class="ic"><use href="#i-recents"/></svg></button>
+                  <button class="icon-btn" id="kPower" title="Power"><svg class="ic"><use href="#i-power"/></svg></button>
+                  <button class="icon-btn" id="kVolUp" title="Volume up"><svg class="ic"><use href="#i-vol-up"/></svg></button>
+                  <button class="icon-btn" id="kVolDown" title="Volume down"><svg class="ic"><use href="#i-vol-down"/></svg></button>
+                </div>
+              </div>
+              <div class="row" id="typeRow" hidden>
+                <input id="typeText" class="grow" placeholder="Type into the phone, Enter to send">
+                <button class="icon-btn" id="btnType"><svg class="ic"><use href="#i-keyboard"/></svg></button>
+              </div>
+              <p class="dim small-text">Click to tap, drag to swipe, hold to long-press. This view refreshes every 1–3 s; the smooth window is real-time.</p>
+            </div>
+
+            <div class="logcat-col">
+              <div class="crash" id="crashBar" hidden>
+                <svg class="ic"><use href="#i-alert"/></svg> <span id="crashText">The app crashed.</span>
+                <div class="spacer"></div>
+                <button class="btn primary small" id="btnCrashFix"><svg class="ic"><use href="#i-sparkles"/></svg> Ask to fix</button>
+                <button class="icon-btn" id="btnCrashClose"><svg class="ic"><use href="#i-x"/></svg></button>
+              </div>
+              <div class="row wrap logcat-bar">
+                <button class="btn small" id="btnLogcat"><svg class="ic"><use href="#i-play"/></svg> <span>Start logcat</span></button>
+                <select id="lcScope" title="Which logs"><option value="app">This app only</option><option value="all">Whole device</option></select>
+                <select id="lcLevel" title="Minimum level">
+                  <option value="V">Verbose</option><option value="D">Debug</option><option value="I">Info</option>
+                  <option value="W">Warn</option><option value="E">Error</option>
+                </select>
+                <div class="search grow"><svg class="ic"><use href="#i-search"/></svg><input id="lcSearch" placeholder="Filter"></div>
+                <button class="icon-btn" id="btnLcPause" title="Pause auto-scroll"><svg class="ic"><use href="#i-pause"/></svg></button>
+                <button class="icon-btn" id="btnLcClear" title="Clear"><svg class="ic"><use href="#i-trash"/></svg></button>
+                <button class="btn small" id="btnLcAsk" title="Send the visible log to the chat"><svg class="ic"><use href="#i-sparkles"/></svg> Ask</button>
+              </div>
+              <div class="logcat" id="logcat"></div>
+            </div>
+          </div>
+        </section>
+
+        <div class="console">
+          <div class="console-head">
+            <span id="consoleTitle">Build output</span>
+            <div class="spacer"></div>
+            <button class="btn primary small" id="btnFix" hidden><svg class="ic"><use href="#i-sparkles"/></svg> Ask to fix</button>
+            <button class="btn small" id="btnConsoleStop" hidden><svg class="ic"><use href="#i-stop"/></svg> Stop</button>
+            <button class="btn small plain" id="btnConsoleClear">Clear</button>
+          </div>
+          <pre id="andLog"></pre>
+        </div>
+        <div class="shot" id="shotBox" hidden><img id="shotImg" alt="Device screenshot"><button class="btn small" id="btnShotClose">Close</button></div>
+      </div>
+
+      <!-- PROCESSES -->
+      <div class="tab" id="tab-procs" hidden>
+        <ul id="procList" class="procs"></ul>
+        <pre id="procLog" class="proclog"></pre>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ============ ADD PROJECT ============ -->
+<dialog id="dlgAdd" class="sheet">
+  <form method="dialog">
+    <h3>Add project folder</h3>
+    <div class="row"><input id="addPath" class="grow mono" placeholder="/home/you/AndroidStudioProjects/MyApp"><button type="button" class="btn" id="addUp"><svg class="ic"><use href="#i-up"/></svg> Up</button></div>
+    <ul id="addDirs" class="dirs"></ul>
+    <div class="row end"><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Add Folder</button></div>
+  </form>
+</dialog>
+
+<!-- ============ CLONE / NEW PROJECT ============ -->
+<dialog id="dlgProject" class="sheet">
+  <form method="dialog" id="projForm">
+    <div class="row"><nav class="segmented" id="projSeg"><button type="button" data-kind="clone" class="active"><svg class="ic"><use href="#i-clone"/></svg> Clone repo</button><button type="button" data-kind="new"><svg class="ic"><use href="#i-folder-plus"/></svg> New project</button></nav></div>
+    <label class="field" id="pjUrlWrap">Repository URL<input id="pjUrl" class="mono" placeholder="https://github.com/you/app.git  or  git@github.com:you/app.git" autocomplete="off"></label>
+    <label class="field">Folder name<input id="pjName" placeholder="taken from the URL" autocomplete="off"></label>
+    <label class="field">Create inside<input id="pjParent" class="mono" placeholder="~/projects"></label>
+    <label class="check" id="pjGitWrap" hidden><input type="checkbox" id="pjGit" checked> Initialize a Git repository</label>
+    <p class="dim small-text" id="pjHint">Private repos need an SSH key or a Git credential helper (e.g. <code>gh auth login</code>) on this computer. Progress shows in Processes.</p>
+    <div class="row end"><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary" id="pjOk">Clone</button></div>
+  </form>
+</dialog>
+
+<!-- ============ QUICK OPEN ============ -->
+<dialog id="dlgQuick" class="palette">
+  <input id="quickQ" placeholder="Go to file…" autocomplete="off">
+  <ul id="quickList"></ul>
+</dialog>
+<div class="menu" id="ctxMenu" hidden></div>
+
+<!-- ============ SETTINGS ============ -->
+<dialog id="dlgSettings" class="settings">
+  <div class="settings-win">
+    <nav class="settings-nav" id="settingsNav">
+      <button data-sec="general" class="active"><svg class="ic"><use href="#i-sliders"/></svg> General</button>
+      <button data-sec="profile"><svg class="ic"><use href="#i-user"/></svg> Profile &amp; Account</button>
+      <button data-sec="agents"><svg class="ic"><use href="#i-plug"/></svg> Agents</button>
+      <button data-sec="models"><svg class="ic"><use href="#i-key"/></svg> Models &amp; Keys</button>
+      <button data-sec="web"><svg class="ic"><use href="#i-globe"/></svg> Web App</button>
+      <button data-sec="android"><svg class="ic"><use href="#i-phone"/></svg> Android</button>
+      <button data-sec="about"><svg class="ic"><use href="#i-info"/></svg> About</button>
+    </nav>
+    <div class="settings-body">
+      <button class="icon-btn settings-close" id="setClose" title="Close"><svg class="ic"><use href="#i-x"/></svg></button>
+
+      <section data-sec="general">
+        <h2>General</h2>
+        <div class="form-group">
+          <div class="form-row"><span>Appearance</span>
+            <div class="segmented" id="themeSeg">
+              <button data-theme="light"><svg class="ic"><use href="#i-sun"/></svg> Light</button>
+              <button data-theme="dark"><svg class="ic"><use href="#i-moon"/></svg> Dark</button>
+              <button data-theme="system"><svg class="ic"><use href="#i-laptop"/></svg> Auto</button>
+            </div>
+          </div>
+          <div class="form-row"><span>Accent color</span><div class="swatches" id="swatches"></div></div>
+          <div class="form-row"><span>Density</span>
+            <div class="segmented" id="densitySeg"><button data-density="compact">Compact</button><button data-density="regular">Regular</button><button data-density="large">Large</button></div>
+          </div>
+        </div>
+        <div class="form-group">
+          <div class="form-row"><span>Default agent permissions</span>
+            <select id="setMode">
+              <option value="ask">Ask before acting</option>
+              <option value="acceptEdits">Auto-edit, ask for commands</option>
+              <option value="auto">Auto (asks only when unsure)</option>
+              <option value="bypassPermissions">Full access — never ask</option>
+              <option value="plan">Plan only (read-only)</option>
+            </select>
+          </div>
+          <p class="dim form-note">In the “ask” modes, risky actions (deleting files, sudo, force-push, installing software…) show a warning card in the chat and wait for you to allow or deny them.</p>
+        </div>
+      </section>
+
+      <section data-sec="profile" hidden>
+        <h2>Profile &amp; Account</h2>
+        <div class="profile-head"><span class="avatar big" id="pfAvatar"></span><div><b id="pfTitle"></b><div class="dim" id="pfSub"></div></div></div>
+        <div class="form-group">
+          <label class="form-row"><span>Display name</span><input id="pfName" maxlength="40"></label>
+          <label class="form-row" id="pfPinRow"><span>PIN</span><input id="pfPin" type="password" inputmode="numeric" maxlength="12" placeholder="No PIN" autocomplete="new-password"></label>
+        </div>
+        <p class="dim form-note" id="pfInfo"></p>
+        <div class="row end"><button class="btn primary" id="pfSave">Save Changes</button></div>
+        <div class="form-group">
+          <div class="form-row"><span>Switch profile</span><button class="btn" id="pfSwitch">Switch…</button></div>
+          <div class="form-row"><span>Sign out of this profile</span><button class="btn" id="pfLogout"><svg class="ic"><use href="#i-logout"/></svg> Sign Out</button></div>
+          <div class="form-row"><span>Delete profile, chats and keys</span><button class="btn danger" id="pfDelete"><svg class="ic"><use href="#i-trash"/></svg> Delete…</button></div>
+        </div>
+        <h4>Google sign-in</h4>
+        <p class="dim" id="setGoogleState"></p>
+      </section>
+
+      <section data-sec="agents" hidden>
+        <h2>Agents</h2>
+        <p class="dim">Forge Studio works with any coding-agent CLI. Claude Code gets the full experience (streaming, approvals, images, model providers); Codex has a native adapter; others run from a command template.</p>
+        <ul class="list" id="agentList"></ul>
+        <h4>Add a custom agent</h4>
+        <div class="form-group">
+          <label class="form-row"><span>Name</span><input id="agName" placeholder="My agent"></label>
+          <label class="form-row"><span>Command</span><input id="agTpl" class="mono" placeholder="mycli --yes -p {prompt}"></label>
+        </div>
+        <p class="dim form-note"><code>{prompt}</code> is replaced by your message (and <code>{model}</code> by the chosen model). The command runs inside the project folder and its output streams into the chat.</p>
+        <div class="row end"><button class="btn primary" id="agAdd">Add Agent</button></div>
+      </section>
+
+      <section data-sec="models" hidden>
+        <h2>Models &amp; Keys</h2>
+        <p class="dim">Private to this profile. <b>This computer's Claude login</b> uses whatever account <code>claude</code> is signed in with. Add your own Anthropic API key or any Anthropic-compatible provider to use your own account or other models (Claude Code agent).</p>
+        <ul class="list" id="provList"></ul>
+        <div class="row"><select id="provPreset" class="grow"></select><button type="button" class="btn" id="provAdd"><svg class="ic"><use href="#i-plus"/></svg> Add</button></div>
+        <div class="form-group" id="provEdit" hidden>
+          <input type="hidden" id="peId"><input type="hidden" id="peType">
+          <label class="form-row"><span>Name</span><input id="peName"></label>
+          <label class="form-row" id="peUrlWrap"><span>Base URL</span><input id="peUrl" class="mono" placeholder="https://…"></label>
+          <label class="form-row" id="peApiWrap"><span>API style</span><select id="peApi"><option value="openai">OpenAI (Chat Completions)</option><option value="anthropic">Anthropic (Messages)</option></select></label>
+          <label class="form-row"><span>API key</span><input id="peKey" type="password" autocomplete="off"></label>
+          <label class="form-row top" id="peModelsWrap"><span>Models<br><small class="dim">one per line; first = main, last = quick tasks</small></span><textarea id="peModels" rows="3" class="mono"></textarea></label>
+          <p class="dim form-note" id="peHint"></p>
+          <div class="row end"><button type="button" class="btn" id="peCancel">Cancel</button><button type="button" class="btn primary" id="peSave">Save Provider</button></div>
+        </div>
+      </section>
+
+      <section data-sec="web" hidden>
+        <h2>Web App</h2>
+        <div class="form-group">
+          <div class="form-row top"><span>Access token<br><small class="dim">the secret that authorises a device — treat it like a password</small></span>
+            <div class="copyline grow"><input id="tokenView" readonly class="mono grow" type="password"><button type="button" class="icon-btn" id="tokenReveal" title="Show / hide"><svg class="ic"><use href="#i-sun"/></svg></button><button type="button" class="btn" id="tokenCopy">Copy</button></div></div>
+          <div class="form-row"><span>Link for this computer (opens signed in)</span><button class="btn" id="localCopy">Copy Link</button></div>
+        </div>
+        <div class="form-group">
+          <div class="form-row"><span>Install as an app on this computer</span><button class="btn" id="btnInstall">Install…</button></div>
+          <div class="form-row"><span>Use from phones and other computers on your network</span><label class="switch"><input type="checkbox" id="lanToggle"><i></i></label></div>
+        </div>
+        <div class="warnbox" id="lanWarn">Anyone on your network who has this link can open the sign-in screen. Give every profile a PIN before turning this on, and only use it on networks you trust (home Wi-Fi, not public Wi-Fi).</div>
+        <div id="lanInfo" hidden>
+          <p>Open this link on your phone or another computer:</p>
+          <div class="copyline"><input id="lanUrl" readonly class="mono grow"><button class="btn" id="lanCopy">Copy</button></div>
+        </div>
+      </section>
+
+      <section data-sec="android" hidden>
+        <h2>Android</h2>
+        <div class="form-group">
+          <label class="form-row"><span>Android Studio launcher</span><input id="setStudio" class="mono" placeholder="auto-detect"></label>
+        </div>
+        <div class="row end"><button class="btn primary" id="setStudioSave">Save</button></div>
+        <div class="dim" id="setTools"></div>
+      </section>
+
+      <section data-sec="about" hidden>
+        <h2>About</h2>
+        <div class="about"><img src="icon.svg" alt=""><div><b>Forge Studio</b><div class="dim">A desktop studio for AI coding agents — chat, live preview, and Android build &amp; debug tools. Runs locally on this computer.</div></div></div>
+        <h4>What agents can make</h4>
+        <p class="dim">Agents can write code, documents (Markdown, HTML, PDF/DOCX via scripts), spreadsheets, diagrams and SVG graphics, and anything a script can produce. Files they create show up with Open / Download buttons in the chat. Claude models don't generate photos or videos themselves; for that, add a CLI or script that calls an image/video API.</p>
+      </section>
+    </div>
+  </div>
+</dialog>
+
+<div id="toasts"></div>
+<script src="app.js"></script>
+<script src="code.js"></script>
+</body>
+</html>

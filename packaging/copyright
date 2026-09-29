@@ -1,0 +1,7 @@
+Forge Studio
+A local desktop studio for AI coding agents.
+
+Files: *
+This software is provided as-is for personal use.
+Bundled third-party runtime dependencies (python3, chromium, adb, node, scrcpy)
+are not included and remain under their own licenses.

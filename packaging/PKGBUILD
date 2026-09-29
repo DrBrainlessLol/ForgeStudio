@@ -1,0 +1,31 @@
+# Maintainer: Forge Studio
+pkgname=forge-studio
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="AI coding agents with live website preview and Android tools"
+arch=('any')
+url="https://localhost"
+license=('custom')
+depends=('python' 'curl')
+optdepends=('chromium: run in an app window'
+            'android-tools: Android device/build tools (adb)'
+            'jdk-openjdk: build Android apps'
+            'nodejs: npm dev-server previews'
+            'npm: npm dev-server previews'
+            'scrcpy: real-time phone mirror')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  install -d "$pkgdir/usr/lib/forge-studio"
+  cp -r server.py static forge-studio "$pkgdir/usr/lib/forge-studio/"
+  chmod 755 "$pkgdir/usr/lib/forge-studio/forge-studio"
+  install -d "$pkgdir/usr/bin"
+  ln -s /usr/lib/forge-studio/forge-studio "$pkgdir/usr/bin/forge-studio"
+  install -Dm644 forge-studio.desktop "$pkgdir/usr/share/applications/forge-studio.desktop"
+  install -Dm644 icons/scalable.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/forge-studio.svg"
+  for s in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "icons/$s.png" "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps/forge-studio.png"
+  done
+  install -Dm644 README.md "$pkgdir/usr/share/doc/forge-studio/README.md"
+}

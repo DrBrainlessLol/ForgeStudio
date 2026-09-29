@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Start the Forge Studio server (if not already running) and open it in an app window.
+set -euo pipefail
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+PORT="${FORGE_STUDIO_PORT:-8765}"
+CONF="$HOME/.config/forge-studio"
+LOG="$CONF/server.log"
+mkdir -p "$CONF"
+
+if ! curl -fs -o /dev/null "http://127.0.0.1:$PORT/"; then
+  setsid nohup python3 "$DIR/server.py" >"$LOG" 2>&1 < /dev/null &
+  for _ in $(seq 50); do curl -fs -o /dev/null "http://127.0.0.1:$PORT/" && break; sleep 0.1; done
+fi
+URL="http://127.0.0.1:$PORT/#token=$(cat "$CONF/token")"
+# Optional folder argument: open Studio focused on that project (used by the Android Studio "Tools" menu entry).
+if [ -n "${1:-}" ] && [ -d "$1" ]; then
+  URL="$URL&project=$(python3 -c 'import sys,urllib.parse,os;print(urllib.parse.quote(os.path.abspath(sys.argv[1])))' "$1")"
+fi
+
+[ "${1:-}" = "--server-only" ] && { echo "$URL"; exit 0; }
+
+for b in google-chrome chromium chromium-browser microsoft-edge brave-browser; do
+  if command -v "$b" >/dev/null; then exec "$b" --app="$URL" --class=ForgeStudio >/dev/null 2>&1; fi
+done
+if [ -x /usr/bin/ll-cli ] && ll-cli list 2>/dev/null | grep -q org.chromium.www; then
+  exec ll-cli run org.chromium.www -- chromium-browser-unstable.wrapper --app="$URL" >/dev/null 2>&1
+fi
+exec xdg-open "$URL"

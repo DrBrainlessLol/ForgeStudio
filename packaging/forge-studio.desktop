@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Forge Studio
+GenericName=AI Coding Studio
+Comment=AI coding agents with live website preview and Android tools
+Exec=forge-studio %U
+Icon=forge-studio
+Terminal=false
+Categories=Development;IDE;
+Keywords=AI;Claude;code;agent;android;preview;
+StartupWMClass=ForgeStudio
+StartupNotify=true

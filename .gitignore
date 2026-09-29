@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+# Build outputs (regenerate with packaging/build.sh)
+packaging/dist/
+# Node (only if a web dev-preview project is nested here)
+node_modules/
+# OS / editor
+.DS_Store
+*.swp
