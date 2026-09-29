@@ -1041,6 +1041,7 @@ function showTab(name) {
   $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach((t) => (t.hidden = t.id !== "tab-" + name));
   store.set("fs:tab", name);
+  $("#layout").classList.toggle("code-left", name === "code");
   if (name === "android") act(refreshDevices)();
   if (name === "procs") renderProcs();
   if (name === "code" && typeof codeTabShown === "function") codeTabShown();
@@ -1060,8 +1061,9 @@ if (store.get("fs:nopanel", false)) $("#layout").classList.add("no-panel");
   r.onpointerdown = (e) => {
     r.setPointerCapture(e.pointerId); r.classList.add("drag");
     $$("iframe").forEach((f) => (f.style.pointerEvents = "none"));
-    const left = chat.getBoundingClientRect().left;
-    r.onpointermove = (m) => { chat.style.width = Math.max(340, m.clientX - left) + "px"; };
+    const box = chat.getBoundingClientRect(), right = $("#layout").classList.contains("code-left");
+    // chat on the left grows as the divider moves right; docked on the right (Code tab) it grows as it moves left
+    r.onpointermove = (m) => { chat.style.width = Math.max(340, right ? box.right - m.clientX : m.clientX - box.left) + "px"; };
     r.onpointerup = () => {
       r.onpointermove = null; r.classList.remove("drag");
       $$("iframe").forEach((f) => (f.style.pointerEvents = ""));

@@ -437,6 +437,13 @@ dialog h3 { margin: 0 0 10px; font-size: 1.1em; }
 .layout.no-panel .panel, .layout.no-panel .resizer { display: none; }
 .layout.no-panel .chat { width: 100% !important; flex: 1; }
 #btnTogglePanel .ic { transform: scaleX(-1); }
+/* Code tab: the panel moves to the left of the chat, like an IDE (Preview / Android / Processes stay on the right) */
+@media (min-width: 901px) {
+  .layout.code-left .panel { order: 1; }
+  .layout.code-left .resizer { order: 2; }
+  .layout.code-left .chat { order: 3; }
+  .layout.code-left #btnTogglePanel .ic { transform: none; }
+}
 
 /* ============================================================ code editor & git */
 :root, [data-theme="dark"] {
