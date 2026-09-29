@@ -1044,8 +1044,15 @@ function showTab(name) {
   $("#layout").classList.toggle("code-left", name === "code");
   if (name === "android") act(refreshDevices)();
   if (name === "procs") renderProcs();
-  if (name === "code" && typeof codeTabShown === "function") codeTabShown();
 }
+// the code editor is its own pane on the left of the chat, independent of the Preview / Android / Processes tabs
+function showCode(on = $("#tab-code").hidden) {
+  $("#tab-code").hidden = $("#codeSplit").hidden = !on;
+  $("#btnCode").classList.toggle("on", on);
+  store.set("fs:code", on);
+  if (on && typeof codeTabShown === "function") codeTabShown();
+}
+$("#btnCode").onclick = () => showCode();
 $$(".tabs button").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 $("#btnSidebar").onclick = () => {
   const l = $("#layout");
@@ -1068,6 +1075,21 @@ if (store.get("fs:nopanel", false)) $("#layout").classList.add("no-panel");
       r.onpointermove = null; r.classList.remove("drag");
       $$("iframe").forEach((f) => (f.style.pointerEvents = ""));
       store.set("fs:chatw", parseInt(chat.style.width));
+    };
+  };
+})();
+(() => {
+  const r = $("#codeSplit"), pane = $("#tab-code");
+  const w = store.get("fs:codew", null); if (w) pane.style.width = w + "px";
+  r.onpointerdown = (e) => {
+    r.setPointerCapture(e.pointerId); r.classList.add("drag");
+    $$("iframe").forEach((f) => (f.style.pointerEvents = "none"));
+    const left = pane.getBoundingClientRect().left;
+    r.onpointermove = (m) => { pane.style.width = Math.max(360, m.clientX - left) + "px"; };
+    r.onpointerup = () => {
+      r.onpointermove = null; r.classList.remove("drag");
+      $$("iframe").forEach((f) => (f.style.pointerEvents = ""));
+      store.set("fs:codew", parseInt(pane.style.width));
     };
   };
 })();
@@ -1262,7 +1284,9 @@ $("#dlgAdd").onclose = act(async () => {
   $("#mode").value = S.prefs.mode || "ask";
   connect();
   applyDevice();
-  showTab(store.get("fs:tab", "preview"));
+  const tab = store.get("fs:tab", "preview");
+  showTab(["preview", "android", "procs"].includes(tab) ? tab : "preview");
+  showCode(store.get("fs:code", false) || tab === "code");
   let start = store.get(pkey("cur"), null);
   if (hashProject) {
     try { start = (await api("/api/projects/add", { path: hashProject })).path; await loadState(); } catch (e) { toast(e.message, true); }

@@ -337,7 +337,7 @@ function normalizeRel(p) {
 }
 async function openInEditor(pathOrAbs, line) {
   if (!S.cur) return;
-  showTab("code");
+  showCode(true);
   const rel = normalizeRel(pathOrAbs);
   let t = tabByPath(rel);
   if (!t) { try { t = await openTab(rel); } catch (e) { return toast(e.message, true); } }
@@ -949,7 +949,7 @@ function initCode() {
         toast("Cloning… progress is in Processes"); $("#dlgProject").close();
       } else {
         const p = await api("/api/projects/new", { parent, name, git: $("#pjGit").checked });
-        $("#dlgProject").close(); await loadState(); await selectProject(p.path); showTab("code");
+        $("#dlgProject").close(); await loadState(); await selectProject(p.path); showCode(true);
       }
     })();
   };

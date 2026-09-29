@@ -69,6 +69,7 @@
 <!-- ============ WINDOW ============ -->
 <header class="titlebar">
   <button class="tb-btn" id="btnSidebar" title="Show / hide sidebar"><svg class="ic"><use href="#i-sidebar"/></svg></button>
+  <button class="tb-btn tb-code" id="btnCode" title="Show / hide the code editor"><svg class="ic"><use href="#i-code"/></svg><span>Code</span></button>
   <div class="tb-title"><img src="icon.svg" alt=""><span>Forge Studio</span><span class="crumb" id="crumb"></span></div>
   <div class="spacer"></div>
   <span class="conn" id="conn" title="Server connection"></span>
@@ -88,6 +89,60 @@
   </aside>
 
   <main class="work">
+    <!-- CODE -->
+    <section class="codepane" id="tab-code" hidden>
+      <div class="code-wrap" id="codeWrap">
+        <aside class="code-side" id="codeSide">
+          <nav class="code-rail">
+            <button data-view="files" class="active" title="Explorer (Ctrl+Shift+E)"><svg class="ic"><use href="#i-files"/></svg></button>
+            <button data-view="search" title="Search in files (Ctrl+Shift+F)"><svg class="ic"><use href="#i-search"/></svg></button>
+            <button data-view="git" title="Source control (Ctrl+Shift+G)"><svg class="ic"><use href="#i-branch"/></svg><span class="rail-badge" id="gitBadge" hidden></span></button>
+            <div class="spacer"></div>
+            <button id="btnCodeSide" title="Hide file panel"><svg class="ic"><use href="#i-sidebar"/></svg></button>
+          </nav>
+          <section class="code-view" data-view="files">
+            <div class="cv-head"><span id="treeTitle">Explorer</span><div class="spacer"></div>
+              <button class="icon-btn" id="btnNewFile" title="New file"><svg class="ic"><use href="#i-file-plus"/></svg></button>
+              <button class="icon-btn" id="btnNewFolder" title="New folder"><svg class="ic"><use href="#i-folder-plus"/></svg></button>
+              <button class="icon-btn" id="btnTreeRefresh" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
+              <button class="icon-btn" id="btnTreeCollapse" title="Collapse folders"><svg class="ic"><use href="#i-collapse"/></svg></button>
+            </div>
+            <ul class="tree" id="tree"></ul>
+          </section>
+          <section class="code-view" data-view="search" hidden>
+            <div class="cv-head"><span>Search</span></div>
+            <div class="cv-pad">
+              <div class="search big"><svg class="ic"><use href="#i-search"/></svg><input id="codeQ" placeholder="Search in files" autocomplete="off">
+                <button class="tog" id="qCase" title="Match case">Aa</button><button class="tog" id="qRegex" title="Regular expression">.*</button></div>
+            </div>
+            <div class="dim cv-pad small-text" id="searchInfo"></div>
+            <ul class="results" id="searchResults"></ul>
+          </section>
+          <section class="code-view" data-view="git" hidden>
+            <div class="cv-head"><span>Source Control</span><div class="spacer"></div>
+              <button class="icon-btn" id="btnGitPull" title="Pull"><svg class="ic"><use href="#i-arrow-down"/></svg></button>
+              <button class="icon-btn" id="btnGitPush" title="Push"><svg class="ic"><use href="#i-arrow-up"/></svg></button>
+              <button class="icon-btn" id="btnGitRefresh" title="Refresh (also fetches)"><svg class="ic"><use href="#i-refresh"/></svg></button>
+            </div>
+            <div class="git-body" id="gitBody"></div>
+          </section>
+        </aside>
+        <div class="code-resizer" id="codeResizer"></div>
+        <div class="editor-col">
+          <div class="ed-tabs-row">
+            <div class="ed-tabs" id="edTabs"></div>
+            <button class="icon-btn" id="btnShowSide" title="Show file panel" hidden><svg class="ic"><use href="#i-sidebar"/></svg></button>
+            <button class="btn small plain" id="btnEdAsk" title="Send the file or selection to the agent"><svg class="ic"><use href="#i-sparkles"/></svg> Ask agent</button>
+            <button class="icon-btn" id="btnEdSave" title="Save (Ctrl+S)"><svg class="ic"><use href="#i-save"/></svg></button>
+          </div>
+          <div class="ed-crumbs" id="edCrumbs"></div>
+          <div class="ed-body" id="edBody"></div>
+          <div class="ed-status" id="edStatus"></div>
+        </div>
+      </div>
+    </section>
+    <div class="resizer" id="codeSplit" hidden></div>
+
     <section class="chat" id="chatPane">
       <div class="pane-head">
         <button class="btn plain" id="btnHistory" title="Chat history"><svg class="ic"><use href="#i-history"/></svg><span id="chatTitle">New chat</span><svg class="ic chev"><use href="#i-chevron"/></svg></button>
@@ -129,64 +184,10 @@
     <section class="panel" id="panel">
       <div class="pane-head center">
         <nav class="segmented tabs">
-          <button data-tab="code"><svg class="ic"><use href="#i-code"/></svg> Code</button>
           <button data-tab="preview" class="active"><svg class="ic"><use href="#i-globe"/></svg> Preview</button>
           <button data-tab="android"><svg class="ic"><use href="#i-phone"/></svg> Android</button>
           <button data-tab="procs"><svg class="ic"><use href="#i-terminal"/></svg> Processes</button>
         </nav>
-      </div>
-
-      <!-- CODE -->
-      <div class="tab" id="tab-code" hidden>
-        <div class="code-wrap" id="codeWrap">
-          <aside class="code-side" id="codeSide">
-            <nav class="code-rail">
-              <button data-view="files" class="active" title="Explorer (Ctrl+Shift+E)"><svg class="ic"><use href="#i-files"/></svg></button>
-              <button data-view="search" title="Search in files (Ctrl+Shift+F)"><svg class="ic"><use href="#i-search"/></svg></button>
-              <button data-view="git" title="Source control (Ctrl+Shift+G)"><svg class="ic"><use href="#i-branch"/></svg><span class="rail-badge" id="gitBadge" hidden></span></button>
-              <div class="spacer"></div>
-              <button id="btnCodeSide" title="Hide file panel"><svg class="ic"><use href="#i-sidebar"/></svg></button>
-            </nav>
-            <section class="code-view" data-view="files">
-              <div class="cv-head"><span id="treeTitle">Explorer</span><div class="spacer"></div>
-                <button class="icon-btn" id="btnNewFile" title="New file"><svg class="ic"><use href="#i-file-plus"/></svg></button>
-                <button class="icon-btn" id="btnNewFolder" title="New folder"><svg class="ic"><use href="#i-folder-plus"/></svg></button>
-                <button class="icon-btn" id="btnTreeRefresh" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
-                <button class="icon-btn" id="btnTreeCollapse" title="Collapse folders"><svg class="ic"><use href="#i-collapse"/></svg></button>
-              </div>
-              <ul class="tree" id="tree"></ul>
-            </section>
-            <section class="code-view" data-view="search" hidden>
-              <div class="cv-head"><span>Search</span></div>
-              <div class="cv-pad">
-                <div class="search big"><svg class="ic"><use href="#i-search"/></svg><input id="codeQ" placeholder="Search in files" autocomplete="off">
-                  <button class="tog" id="qCase" title="Match case">Aa</button><button class="tog" id="qRegex" title="Regular expression">.*</button></div>
-              </div>
-              <div class="dim cv-pad small-text" id="searchInfo"></div>
-              <ul class="results" id="searchResults"></ul>
-            </section>
-            <section class="code-view" data-view="git" hidden>
-              <div class="cv-head"><span>Source Control</span><div class="spacer"></div>
-                <button class="icon-btn" id="btnGitPull" title="Pull"><svg class="ic"><use href="#i-arrow-down"/></svg></button>
-                <button class="icon-btn" id="btnGitPush" title="Push"><svg class="ic"><use href="#i-arrow-up"/></svg></button>
-                <button class="icon-btn" id="btnGitRefresh" title="Refresh (also fetches)"><svg class="ic"><use href="#i-refresh"/></svg></button>
-              </div>
-              <div class="git-body" id="gitBody"></div>
-            </section>
-          </aside>
-          <div class="code-resizer" id="codeResizer"></div>
-          <div class="editor-col">
-            <div class="ed-tabs-row">
-              <div class="ed-tabs" id="edTabs"></div>
-              <button class="icon-btn" id="btnShowSide" title="Show file panel" hidden><svg class="ic"><use href="#i-sidebar"/></svg></button>
-              <button class="btn small plain" id="btnEdAsk" title="Send the file or selection to the agent"><svg class="ic"><use href="#i-sparkles"/></svg> Ask agent</button>
-              <button class="icon-btn" id="btnEdSave" title="Save (Ctrl+S)"><svg class="ic"><use href="#i-save"/></svg></button>
-            </div>
-            <div class="ed-crumbs" id="edCrumbs"></div>
-            <div class="ed-body" id="edBody"></div>
-            <div class="ed-status" id="edStatus"></div>
-          </div>
-        </div>
       </div>
 
       <!-- PREVIEW -->

@@ -135,6 +135,8 @@ input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; m
   backdrop-filter: saturate(180%) blur(20px); border-bottom: 0.5px solid var(--line); position: relative; z-index: 20; }
 .tb-btn { width: 30px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: var(--dim); display: grid; place-items: center; }
 .tb-btn:hover { background: var(--hover); color: var(--text); }
+.tb-btn.tb-code { width: auto; display: flex; gap: 5px; padding: 0 9px; font-weight: 500; }
+.tb-btn.tb-code.on { background: var(--accent-soft); color: var(--accent); }
 .tb-title { display: flex; align-items: center; gap: 8px; font-weight: 600; min-width: 0; }
 .tb-title img { width: 20px; height: 20px; }
 .crumb { font-weight: 400; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -183,6 +185,8 @@ input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; m
 .resizer { width: 1px; background: var(--line); flex: none; position: relative; cursor: col-resize; }
 .resizer::after { content: ""; position: absolute; inset: 0 -3px; }
 .resizer:hover, .resizer.drag { background: var(--accent); }
+/* code editor pane: left of the chat, like an IDE (Preview / Android / Processes stay on the right) */
+.codepane { width: 42%; min-width: 360px; flex: 0 1 auto; display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
 .panel { flex: 1; min-width: 340px; display: flex; flex-direction: column; background: var(--bg); }
 .pane-head { height: 42px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 10px; border-bottom: 0.5px solid var(--line); }
 .pane-head.center { justify-content: center; }
@@ -425,6 +429,8 @@ dialog h3 { margin: 0 0 10px; font-size: 1.1em; }
   .layout.no-sidebar .sidebar, .layout:not(.show-sidebar) .sidebar { margin-left: -240px; }
   .work { flex-direction: column; overflow: auto; }
   .chat { width: 100% !important; min-width: 0; height: 70vh; flex: none; }
+  .codepane { width: 100% !important; min-width: 0; height: 80vh; flex: none; }
+  .tb-btn.tb-code span { display: none; }
   .resizer { display: none; }
   .panel { min-width: 0; min-height: 80vh; }
   .tb-title span:not(.crumb), #profileName { display: none; }
