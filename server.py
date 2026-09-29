@@ -1673,6 +1673,43 @@ def git_net(root, *args):
     return text or "Done"
 
 
+COMMIT_SYSTEM = ("You write concise git commit messages. Use the imperative mood. First line: a summary under "
+                 "72 characters (a conventional-commit prefix such as feat:/fix:/refactor:/docs: is welcome when it "
+                 "fits). If it helps, add a blank line then 1–4 short bullet points. Output ONLY the commit message "
+                 "— no code fences, quotes or preamble.")
+
+
+def model_complete(prov, model, system, user):
+    """One non-streaming completion via an Anthropic- or OpenAI-shaped provider. Returns the text."""
+    wire = "openai" if prov.get("api") == "openai" else "anthropic"
+    base = "https://api.anthropic.com" if prov["type"] == "anthropic" else prov["baseUrl"].rstrip("/")
+    key = prov.get("apiKey") or ""
+    if wire == "openai":
+        url = base + "/chat/completions"
+        headers = {"content-type": "application/json", "authorization": f"Bearer {key}"}
+        body = {"model": model, "max_tokens": 400,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+    else:
+        url = base + "/v1/messages"
+        headers = {"content-type": "application/json", "anthropic-version": "2023-06-01",
+                   "x-api-key": key, "authorization": f"Bearer {key}"}
+        body = {"model": model, "max_tokens": 400, "system": system, "messages": [{"role": "user", "content": user}]}
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            d = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:300]
+        if e.code in (401, 403):
+            raise ValueError(f"{prov['name']} rejected the API key (HTTP {e.code}).")
+        raise ValueError(f"{prov['name']} error {e.code}: {detail}")
+    except Exception as e:
+        raise ValueError(f"Could not reach {prov['name']}: {e}")
+    if wire == "openai":
+        return ((d.get("choices") or [{}])[0].get("message") or {}).get("content", "") or ""
+    return "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
+
+
 def suggest_commit(project, prof, provider_id=None, model=None):
     """Draft a commit message from the current staged + unstaged changes using the model."""
     root = project_root(project)
@@ -1691,20 +1728,23 @@ def suggest_commit(project, prof, provider_id=None, model=None):
     diff = diff.strip()
     if not diff:
         raise ValueError("No changes to describe — edit or stage some files first.")
-    prompt = ("Write a git commit message for the following changes. Use the imperative mood. "
-              "First line: a concise summary under 72 characters (a conventional-commit prefix such as "
-              "feat:/fix:/refactor:/docs: is welcome when it fits). If it helps, add a blank line then "
-              "1–4 short bullet points. Output ONLY the commit message — no code fences, quotes or preamble.\n\n"
-              "Changes:\n```diff\n" + diff[:12000] + "\n```")
-    claude = shutil.which("claude", path=tool_env()["PATH"])
-    if not claude:
-        raise ValueError("The `claude` CLI is needed to generate commit messages.")
+    user = "Changes:\n```diff\n" + diff[:12000] + "\n```"
     prov = prof.provider(provider_id) if provider_id and provider_id != "local" else None
-    r = subprocess.run([claude, "-p", prompt, "--model", model or "haiku"], cwd=project,
-                       env=provider_env(prov), capture_output=True, text=True, errors="replace", timeout=90)
-    if r.returncode != 0:
-        raise ValueError((r.stderr or "Could not generate a message").strip()[:300])
-    msg = re.sub(r"^\s*```[a-zA-Z]*\n?|\n?```\s*$", "", r.stdout.strip()).strip().strip('"').strip()
+    if prov:  # user's own key: Anthropic OR OpenAI-shaped
+        m = model or (prov.get("models") or [None])[0]
+        if not m:
+            raise ValueError(f"Add a model to “{prov['name']}” in Settings → Models & Keys first.")
+        text = model_complete(prov, m, COMMIT_SYSTEM, user)
+    else:  # this computer's Claude login, via the CLI
+        claude = shutil.which("claude", path=tool_env()["PATH"])
+        if not claude:
+            raise ValueError("Sign in with the `claude` CLI or add an API-key provider to generate messages.")
+        r = subprocess.run([claude, "-p", COMMIT_SYSTEM + "\n\n" + user, "--model", model or "haiku"], cwd=project,
+                           env=provider_env(None), capture_output=True, text=True, errors="replace", timeout=90)
+        if r.returncode != 0:
+            raise ValueError((r.stderr or "Could not generate a message").strip()[:300])
+        text = r.stdout
+    msg = re.sub(r"^\s*```[a-zA-Z]*\n?|\n?```\s*$", "", text.strip()).strip().strip('"').strip()
     if not msg:
         raise ValueError("The model returned an empty message — try again.")
     return {"message": msg[:2000]}

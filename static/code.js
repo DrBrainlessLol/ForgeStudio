@@ -817,10 +817,13 @@ function renderGit() {
   $("#gAI").onclick = act(async () => {
     const b = $("#gAI"); b.classList.add("busy"); b.disabled = true;
     try {
-      // use an Anthropic provider if the chat has one selected, else the computer's Claude login (fast Haiku)
+      // use the chat's selected provider+model (Anthropic OR OpenAI-shaped) when it's your own key;
+      // otherwise the computer's Claude login on fast Haiku
       const ch = typeof modelChoice === "function" ? modelChoice() : {};
-      const prov = (S.providers || []).find((p) => p.id === ch.provider && p.type === "anthropic");
-      const r = await api("/api/git/suggest-commit", { project: S.cur, provider: prov ? prov.id : "local" });
+      const useProv = ch.provider && ch.provider !== "local" && (S.providers || []).some((p) => p.id === ch.provider);
+      const r = await api("/api/git/suggest-commit", useProv
+        ? { project: S.cur, provider: ch.provider, model: ch.model }
+        : { project: S.cur, provider: "local" });
       if (r.message) { $("#gMsg").value = r.message; $("#gMsg").focus(); $("#gMsg").setSelectionRange(0, 0); }
     } finally { b.classList.remove("busy"); b.disabled = false; }
   });
