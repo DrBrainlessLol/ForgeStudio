@@ -382,6 +382,7 @@
       <button data-sec="general" class="active"><svg class="ic"><use href="#i-sliders"/></svg> General</button>
       <button data-sec="profile"><svg class="ic"><use href="#i-user"/></svg> Profile &amp; Account</button>
       <button data-sec="agents"><svg class="ic"><use href="#i-plug"/></svg> Agents</button>
+      <button data-sec="plugins"><svg class="ic"><use href="#i-plug"/></svg> Plugins</button>
       <button data-sec="models"><svg class="ic"><use href="#i-key"/></svg> Models &amp; Keys</button>
       <button data-sec="web"><svg class="ic"><use href="#i-globe"/></svg> Web App</button>
       <button data-sec="android"><svg class="ic"><use href="#i-phone"/></svg> Android</button>
@@ -452,6 +453,17 @@
         </div>
         <p class="dim form-note"><code>{prompt}</code> is replaced by your message (and <code>{model}</code> by the chosen model). The command runs inside the project folder and its output streams into the chat.</p>
         <div class="row end"><button class="btn primary" id="agAdd">Add Agent</button></div>
+      </section>
+
+      <section data-sec="plugins" hidden>
+        <h2>Plugins</h2>
+        <p class="dim">Plugins bundle slash commands, agents, skills and MCP servers. Claude Code loads them natively; the Built-in engine supports commands and skills/agents (not MCP). Installed to <code>~/.config/forge-studio/plugins</code>.</p>
+        <ul class="list" id="pluginList"></ul>
+        <h4>Install a plugin</h4>
+        <div class="row"><input id="plSource" class="grow mono" placeholder="/path/to/plugin-name or https://github.com/user/plugin.git"><button type="button" class="btn primary" id="plInstall">Install</button></div>
+        <h4>Create a plugin</h4>
+        <div class="row"><input id="plNewName" class="grow" placeholder="plugin-name"><input id="plNewDesc" class="grow" placeholder="What it does (optional)"><button type="button" class="btn" id="plCreate">Create</button></div>
+        <p class="dim form-note">A plugin is a folder: <code>.claude-plugin/plugin.json</code> (required), <code>.mcp.json</code>, <code>commands/</code>, <code>agents/</code>, <code>skills/</code> and <code>README.md</code> (all optional). Creating one scaffolds this layout with an example command.</p>
       </section>
 
       <section data-sec="models" hidden>

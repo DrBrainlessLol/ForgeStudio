@@ -425,6 +425,186 @@ def agent_by_id(aid):
     return next((a for a in list_agents() if a["id"] == aid), None)
 
 
+# ---------------------------------------------------------------- plugins
+# Standard layout (same as Claude Code plugins):
+#   plugin-name/.claude-plugin/plugin.json  (required)   .mcp.json  commands/  agents/  skills/  README.md
+
+PLUGINS_DIR = CONFIG_DIR / "plugins"
+PLUGIN_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def frontmatter(text):
+    """Split a markdown file into ({key: value}, body). Only flat `key: value` lines are read."""
+    meta, body = {}, text
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            for line in text[3:end].splitlines():
+                k, sep, v = line.partition(":")
+                if sep and k.strip() and not line.startswith((" ", "\t")):
+                    meta[k.strip()] = v.strip().strip("\"'")
+            body = text[end + 4:].lstrip("\n")
+    return meta, body
+
+
+def plugin_md_items(d: Path, skill=False):
+    """Commands/agents (*.md, nested folders allowed) or skills (*/SKILL.md) under one plugin folder."""
+    out = []
+    if not d.is_dir():
+        return out
+    files = sorted(d.glob("*/SKILL.md")) if skill else sorted(d.rglob("*.md"))
+    for f in files:
+        try:
+            meta, body = frontmatter(f.read_text(errors="replace"))
+        except OSError:
+            continue
+        name = f.parent.name if skill else "/".join(f.relative_to(d).with_suffix("").parts)
+        out.append({"name": meta.get("name") or name, "description": meta.get("description", ""),
+                    "file": str(f), "body": body})
+    return out
+
+
+def read_plugin(d: Path):
+    """Validate and describe one plugin folder. Raises ValueError with a readable message."""
+    manifest = d / ".claude-plugin" / "plugin.json"
+    if not manifest.is_file():
+        raise ValueError("Not a plugin: .claude-plugin/plugin.json is missing")
+    try:
+        meta = json.loads(manifest.read_text())
+    except json.JSONDecodeError as e:
+        raise ValueError(f"plugin.json isn't valid JSON ({e})")
+    if not isinstance(meta, dict):
+        raise ValueError("plugin.json must be a JSON object")
+    name = meta.get("name")
+    if not isinstance(name, str) or not PLUGIN_NAME_RE.match(name):
+        raise ValueError('plugin.json needs a "name" (lowercase letters, digits, - . _)')
+    mcp, mcp_file = [], d / ".mcp.json"
+    if mcp_file.is_file():
+        try:
+            m = json.loads(mcp_file.read_text())
+            mcp = sorted((m.get("mcpServers") if isinstance(m.get("mcpServers"), dict) else m).keys())
+        except (json.JSONDecodeError, AttributeError):
+            raise ValueError(".mcp.json isn't valid JSON")
+    return {"id": name, "name": name, "version": str(meta.get("version", "")), "description": str(meta.get("description", "")),
+            "author": (meta.get("author") or {}).get("name", "") if isinstance(meta.get("author"), dict) else str(meta.get("author") or ""),
+            "path": str(d), "readme": (d / "README.md").is_file(), "mcp": mcp,
+            "commands": plugin_md_items(d / "commands"), "agents": plugin_md_items(d / "agents"),
+            "skills": plugin_md_items(d / "skills", skill=True)}
+
+
+def list_plugins(full=False):
+    """Installed plugins. Broken ones are listed with an `error` so they can be removed from the UI."""
+    off = set(CONFIG["settings"].get("plugins_off", []))
+    out = []
+    for d in sorted(PLUGINS_DIR.glob("*")) if PLUGINS_DIR.is_dir() else []:
+        if not d.is_dir():
+            continue
+        try:
+            p = read_plugin(d)
+            p["dir"] = d.name
+        except ValueError as e:
+            p = {"id": d.name, "dir": d.name, "name": d.name, "error": str(e), "path": str(d), "commands": [],
+                 "agents": [], "skills": [], "mcp": [], "version": "", "description": "", "author": "", "readme": False}
+        p["enabled"] = d.name not in off and "error" not in p
+        if not full:  # the UI only needs names and counts
+            for k in ("commands", "agents", "skills"):
+                p[k] = [{"name": i["name"], "description": i["description"]} for i in p[k]]
+        out.append(p)
+    return out
+
+
+def enabled_plugins():
+    return [p for p in list_plugins(full=True) if p["enabled"]]
+
+
+def install_plugin(source):
+    source = (source or "").strip()
+    if not source:
+        raise ValueError("Enter a plugin folder or a git URL")
+    PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = PLUGINS_DIR / (".incoming-" + uuid.uuid4().hex[:8])
+    try:
+        if re.match(r"^(https?://|git@|ssh://)", source) or source.endswith(".git"):
+            r = subprocess.run(["git", "clone", "--depth", "1", "--", source, str(tmp)], capture_output=True, text=True,
+                               timeout=180, env=dict(tool_env(), GIT_TERMINAL_PROMPT="0"))
+            if r.returncode:
+                raise ValueError("git clone failed: " + (r.stderr.strip().splitlines() or ["unknown error"])[-1])
+            shutil.rmtree(tmp / ".git", ignore_errors=True)
+        else:
+            src = Path(source).expanduser().resolve()
+            if not src.is_dir():
+                raise ValueError(f"{src} isn't a folder")
+            if PLUGINS_DIR.resolve() in src.parents or src == PLUGINS_DIR.resolve():
+                raise ValueError("That plugin is already installed")
+            read_plugin(src)  # validate before copying anything
+            if src in PLUGINS_DIR.resolve().parents:
+                raise ValueError("That folder contains Forge Studio's own settings — pick the plugin's folder itself")
+            shutil.copytree(src, tmp, ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__"), symlinks=True)
+        name = read_plugin(tmp)["name"]
+        dest = PLUGINS_DIR / name
+        if dest.exists():
+            raise ValueError(f'A plugin named "{name}" is already installed — remove it first to reinstall')
+        tmp.rename(dest)
+        return name
+    except subprocess.TimeoutExpired:
+        raise ValueError("git clone timed out")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def plugin_dir_of(pid):
+    if not PLUGIN_NAME_RE.match(pid or "") or not (PLUGINS_DIR / pid).is_dir():
+        raise ValueError("Plugin not found")
+    return PLUGINS_DIR / pid
+
+
+def create_plugin(name, description=""):
+    name = (name or "").strip().lower()
+    if not PLUGIN_NAME_RE.match(name):
+        raise ValueError("Use lowercase letters, digits, - . _ for the plugin name")
+    d = PLUGINS_DIR / name
+    if d.exists():
+        raise ValueError(f'A plugin named "{name}" already exists')
+    (d / ".claude-plugin").mkdir(parents=True)
+    for sub in ("commands", "agents", "skills"):
+        (d / sub).mkdir()
+    write_json(d / ".claude-plugin" / "plugin.json", {"name": name, "version": "0.1.0", "description": description or f"The {name} plugin"})
+    (d / "commands" / "hello.md").write_text("---\ndescription: Say hello (example command)\n---\nGreet the user and mention that this command came from the "
+                                             f"{name} plugin. Extra input: $ARGUMENTS\n")
+    (d / "README.md").write_text(f"# {name}\n\n{description or 'Describe what this plugin does.'}\n\n"
+                                 "```\n.claude-plugin/plugin.json   metadata (required)\n.mcp.json                   MCP servers (optional)\n"
+                                 "commands/                   slash commands (optional)\nagents/                     agent definitions (optional)\n"
+                                 "skills/<skill>/SKILL.md     skills (optional)\n```\n")
+    return name
+
+
+def plugin_command(prompt):
+    """Expand `/command args` (or `/plugin:command args`) from an enabled plugin. Used by the built-in engine;
+    Claude Code does this itself. Returns the expanded prompt or None."""
+    m = re.match(r"^/([\w.:/-]+)(?:\s+(.*))?$", prompt.strip(), re.S)
+    if not m:
+        return None
+    want, args = m.group(1), (m.group(2) or "").strip()
+    for p in enabled_plugins():
+        for c in p["commands"]:
+            if want in (c["name"], f"{p['name']}:{c['name']}"):
+                body = c["body"]
+                body = body.replace("$ARGUMENTS", args) if "$ARGUMENTS" in body else (body + (f"\n\n{args}" if args else ""))
+                return body
+    return None
+
+
+def plugin_system_note():
+    """Skills and agents the built-in engine can read on demand (progressive disclosure, like Claude Code)."""
+    lines = []
+    for p in enabled_plugins():
+        for s in p["skills"]:
+            lines.append(f"- skill {s['name']} ({p['name']}): {s['description']} — read {s['file']} when relevant")
+        for a in p["agents"]:
+            lines.append(f"- agent {a['name']} ({p['name']}): {a['description']} — read {a['file']} and follow it as a role when relevant")
+    return ("\n\nInstalled plugins provide these; read the file only when the task matches:\n" + "\n".join(lines)) if lines else ""
+
+
 # ---------------------------------------------------------------- risk hints for approvals
 
 RISKY = [
@@ -620,6 +800,8 @@ class Run:
             cmd += ["--permission-mode", mode, "--permission-prompt-tool", "stdio"]
         else:
             cmd += ["--permission-mode", "bypassPermissions"]
+        for p in enabled_plugins():  # commands, agents, skills and .mcp.json load natively
+            cmd += ["--plugin-dir", p["path"]]
         if self.model:
             cmd += ["--model", self.model]
         if self.chat.get("session"):
@@ -907,7 +1089,7 @@ class Run:
         return 0, ""
 
     def user_message(self, wire):
-        text = self.prompt + (attachment_note(self.files) if self.files else "")
+        text = (plugin_command(self.prompt) or self.prompt) + (attachment_note(self.files) if self.files else "")
         imgs = []
         for f in self.files:
             mt = IMAGE_TYPES.get(Path(f["path"]).suffix.lower())
@@ -944,7 +1126,7 @@ class Run:
                 yield line[5:].strip()
 
     def req_anthropic(self, url, headers, model, messages, totals):
-        body = {"model": model, "max_tokens": 8192, "stream": True, "system": BUILTIN_SYSTEM,
+        body = {"model": model, "max_tokens": 8192, "stream": True, "system": BUILTIN_SYSTEM + plugin_system_note(),
                 "tools": ANTHROPIC_TOOLS, "messages": messages}
         resp, err = self._open_stream(url, headers, body)
         if err:
@@ -991,7 +1173,7 @@ class Run:
     def req_openai(self, url, headers, model, messages, totals):
         body = {"model": model, "max_tokens": 8192, "stream": True, "tools": OPENAI_TOOLS, "tool_choice": "auto",
                 "stream_options": {"include_usage": True},
-                "messages": [{"role": "system", "content": BUILTIN_SYSTEM}] + messages}
+                "messages": [{"role": "system", "content": BUILTIN_SYSTEM + plugin_system_note()}] + messages}
         resp, err = self._open_stream(url, headers, body)
         if err:
             return None, None, err
@@ -1959,6 +2141,7 @@ class Handler(BaseHTTPRequestHandler):
             "previews": {k: {"url": v["url"], "dir": v["dir"]} for k, v in PREVIEWS.items()},
             "running": [cid for cid, r in RUNS.items() if r.running() and cid in prof.data["chats"]],
             "agents": list_agents(),
+            "plugins": list_plugins(),
             "prefs": prof.data["settings"],
             "web": web_access_info(),
             "current": prof.data["current"],
@@ -2133,6 +2316,22 @@ class Handler(BaseHTTPRequestHandler):
             return None
         if path == "/api/agents/delete":
             CONFIG["settings"]["agents"] = [a for a in CONFIG["settings"].get("agents", []) if a["id"] != b["id"]]
+            save_config()
+            return None
+        if path == "/api/plugins/install":
+            return {"name": install_plugin(b.get("source"))}
+        if path == "/api/plugins/create":
+            return {"name": create_plugin(b.get("name"), b.get("description"))}
+        if path == "/api/plugins/toggle":
+            d = plugin_dir_of(b.get("id"))
+            off = set(CONFIG["settings"].get("plugins_off", []))
+            (off.discard if b.get("enabled") else off.add)(d.name)
+            CONFIG["settings"]["plugins_off"] = sorted(off)
+            save_config()
+            return None
+        if path == "/api/plugins/remove":
+            shutil.rmtree(plugin_dir_of(b.get("id")))
+            CONFIG["settings"]["plugins_off"] = [n for n in CONFIG["settings"].get("plugins_off", []) if n != b["id"]]
             save_config()
             return None
         if path == "/api/web-access":

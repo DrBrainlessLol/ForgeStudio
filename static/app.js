@@ -580,7 +580,7 @@ async function selectProject(path) {
 async function loadState() {
   const st = await api("/api/state");
   Object.assign(S, { profile: st.profile, projects: st.projects, tools: st.tools, previews: st.previews, procs: st.procs,
-    providers: st.providers, settings: st.settings, agents: st.agents, prefs: st.prefs || {}, web: st.web });
+    providers: st.providers, settings: st.settings, agents: st.agents, plugins: st.plugins || [], prefs: st.prefs || {}, web: st.web });
   for (const [proj, cid] of Object.entries(st.current)) if (!(proj in S.curChat)) S.curChat[proj] = cid;
   for (const cid of st.running) S.running[cid] ??= "";
   if (S.cur && !project()) S.cur = null;
@@ -673,7 +673,7 @@ function openSettings(sec = "general") {
   applyAppearance(S.prefs);
   $("#setMode").value = S.prefs.mode || "ask";
   $("#setHideTest").checked = !!S.settings?.hideTest;
-  fillProfile(); renderAgentList(); renderProviders(); renderWeb();
+  fillProfile(); renderAgentList(); renderPluginList(); renderProviders(); renderWeb();
   $("#setStudio").value = S.settings?.studio_path || "";
   const t = S.tools;
   $("#setTools").innerHTML = `<div class="form-group">${[["Android Studio", t.studio], ["SDK", t.sdk], ["adb", t.adb], ["Java", t.java], ["Node.js", t.node], ["scrcpy", t.scrcpy]]
@@ -736,6 +736,36 @@ function renderAgentList() {
 $("#agAdd").onclick = act(async () => {
   await api("/api/agents/save", { name: $("#agName").value.trim(), template: $("#agTpl").value.trim() });
   $("#agName").value = $("#agTpl").value = ""; await loadState(); renderAgentList(); toast("Agent added — pick it under the message box");
+});
+
+// plugins
+function renderPluginList() {
+  const ul = $("#pluginList");
+  ul.innerHTML = S.plugins?.length ? "" : '<li class="dim">No plugins installed yet.</li>';
+  for (const p of S.plugins || []) {
+    const parts = p.error ? [] : [[p.commands.length, "command"], [p.agents.length, "agent"], [p.skills.length, "skill"], [p.mcp.length, "MCP server"]]
+      .filter(([n]) => n).map(([n, w]) => `${n} ${w}${n > 1 ? "s" : ""}`);
+    const li = document.createElement("li");
+    li.innerHTML = `${ic("plug")}<span class="grow"><b>${esc(p.name)}</b> ${p.version ? `<span class="badge">${esc(p.version)}</span>` : ""}
+      <small>${p.error ? `<span style="color:var(--err,#e5484d)">${esc(p.error)}</span>` : esc(p.description || "No description")}</small>
+      ${parts.length ? `<small>${esc(parts.join(" · "))}${p.commands.length ? " — " + esc(p.commands.map((c) => "/" + c.name).join(" ")) : ""}</small>` : ""}</span>
+      ${p.error ? "" : `<label class="badge ${p.enabled ? "ok" : ""}" style="cursor:pointer"><input type="checkbox" ${p.enabled ? "checked" : ""} hidden>${p.enabled ? "Enabled" : "Disabled"}</label>`}
+      <button class="icon-btn" title="Remove">${ic("trash")}</button>`;
+    li.querySelector("input")?.addEventListener("change", act(async (e) => { await api("/api/plugins/toggle", { id: p.dir, enabled: e.target.checked }); await loadState(); renderPluginList(); }));
+    li.querySelector("button").addEventListener("click", act(async () => {
+      if (!confirm(`Remove plugin "${p.name}"?`)) return;
+      await api("/api/plugins/remove", { id: p.dir }); await loadState(); renderPluginList();
+    }));
+    ul.append(li);
+  }
+}
+$("#plInstall").onclick = act(async () => {
+  const r = await api("/api/plugins/install", { source: $("#plSource").value.trim() });
+  $("#plSource").value = ""; await loadState(); renderPluginList(); toast(`Installed ${r.name}`);
+});
+$("#plCreate").onclick = act(async () => {
+  const r = await api("/api/plugins/create", { name: $("#plNewName").value.trim(), description: $("#plNewDesc").value.trim() });
+  $("#plNewName").value = $("#plNewDesc").value = ""; await loadState(); renderPluginList(); toast(`Created ${r.name} in ~/.config/forge-studio/plugins/${r.name}`);
 });
 
 // providers
