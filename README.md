@@ -9,6 +9,12 @@ It uses only the Python standard library and plain HTML/CSS/JS with no build ste
 - An agent: [Claude Code](https://docs.claude.com/en/docs/claude-code) (recommended), Codex or another CLI — or just an API key for the built-in engine
 - Optional: Git (Editor's source control), Node.js (dev-server previews), Android SDK + JDK 17+ (Android mode), [scrcpy](https://github.com/Genymobile/scrcpy) (live phone screen)
 
+## Install
+```sh
+curl -fsSL https://raw.githubusercontent.com/DrBrainlessLol/ForgeStudio/main/install.sh | sh
+```
+Installs the latest release for your user into `~/.local` (no root, nothing else installed, checksum verified), then start **Forge Studio** from your app menu or run `forge-studio`. It opens in the browser you already have. Run the same line again to update; add `-s -- --uninstall` after `sh` to remove it (your data is kept). Prefer a package? See [Install / packaging](#install--packaging).
+
 ## Launch
 - Desktop / app menu: **Forge Studio**
 - Terminal: `forge-studio` or `forge-studio ~/path/to/project`
@@ -59,7 +65,7 @@ A built-in editor and Git client, no external tools bundled:
 - When the agent edits files in the open project, the editor reloads them live and the Git panel updates.
 
 ## Install / packaging
-Prebuilt packages are produced by `packaging/build.sh` into `packaging/dist/`:
+The [one-line installer](#install) is the easiest way. Packages are also attached to every [GitHub release](https://github.com/DrBrainlessLol/ForgeStudio/releases) (built with `packaging/build.sh` into `packaging/dist/`):
 - **Debian / Ubuntu / Deepin:** `sudo apt install ./forge-studio_1.0.1_all.deb`
 - **Arch:** `sudo pacman -U forge-studio-1.0.1-1-any.pkg.tar.zst` (or `makepkg -si` with the `PKGBUILD`)
 - **Fedora / openSUSE:** build the RPM with `forge-studio.spec`
