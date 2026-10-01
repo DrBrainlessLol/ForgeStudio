@@ -420,7 +420,7 @@ async function restoreTabs() {
 function renderCrumbs(t) {
   const c = $("#edCrumbs");
   if (!t) { c.innerHTML = ""; return; }
-  const parts = t.path.split("/");
+  const parts = t.path.replace(/^diff:/, "").split("/");  // diff tabs use a "diff:" key; show the real path
   c.innerHTML = [project()?.name, ...parts].map((p, i) => `<span>${esc(p)}</span>${i < parts.length ? `<span class="sep">${ic("chevron-right")}</span>` : ""}`).join("");
 }
 function renderStatus(t) {
