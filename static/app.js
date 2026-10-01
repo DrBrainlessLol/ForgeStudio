@@ -624,6 +624,9 @@ async function selectProject(path) {
   if (innerWidth < 900) $("#layout").classList.remove("show-sidebar");
   renderProjects(); setupPreview(); setupAndroid(); renderProcs();
   if (typeof codeProjectChanged === "function") codeProjectChanged();
+  // Android mode only exists for Android apps; websites and other projects don't get the tab
+  $('#modes [data-mode="android"]').hidden = !!p && !p.android;
+  if (p && !p.android && S.mode === "android") setMode(store.get("fs:lastMode", "editor"));
   if (S.mode === "android") loadToolchain();
   renderStatusBar();
   await openChat(chatId()).catch((e) => { S.curChat[S.cur] = null; renderChat(); toast(e.message, true); });
@@ -1337,6 +1340,7 @@ function setMode(mode, save = true) {
   $("#layout").classList.toggle("no-sidebar", !sideOpen());
   applyWidths();
   if (save) store.set("fs:mode", mode);
+  if (mode !== "android") store.set("fs:lastMode", mode);
   if (mode === "editor" && typeof codeTabShown === "function") codeTabShown();
   if (mode === "android" && prev !== "android") { act(refreshDevices)(); loadToolchain(); }
   if (prev === "android" && mode !== "android" && M.on) stopMirror();  // don't keep streaming video in the background
@@ -1347,7 +1351,10 @@ function setMode(mode, save = true) {
 const showCode = (on = true) => setMode(on ? "editor" : "agent");
 $$("#modes button").forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
 document.addEventListener("keydown", (e) => {
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && ["1", "2", "3"].includes(e.key)) { e.preventDefault(); setMode(MODES[+e.key - 1]); }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && ["1", "2", "3"].includes(e.key)) {
+    e.preventDefault();
+    if (!$(`#modes [data-mode="${MODES[+e.key - 1]}"]`).hidden) setMode(MODES[+e.key - 1]);
+  }
 });
 
 // the projects sidebar is open by default in Agent mode and tucked away in the IDE modes

@@ -87,7 +87,7 @@ function showSide(on) {
 // ============================================================ exported hooks (called from app.js)
 function codeProjectChanged() {
   // persist current tabs of the OLD project already happened on edits; load the new project's state
-  C.tabs = []; C.active = null; C.git = null; C.filesCache = null;
+  C.tabs = []; C.active = null; C.git = null; C.filesCache = null; C.dir = {}; C.treeSel = null;
   C.expanded = new Set(store.get(pkey("tree:" + S.cur), []));
   $("#edTabs").innerHTML = ""; $("#edBody").innerHTML = "";
   $("#tree").innerHTML = ""; $("#searchResults").innerHTML = ""; $("#gitBody").innerHTML = "";
@@ -124,8 +124,11 @@ async function codeAgentTouched(paths) {
 
 // ============================================================ explorer
 C.dir = {};  // rel -> entries[]
+class StaleProject extends Error {}
 async function loadDir(rel) {
-  const d = await api(`/api/code/tree?project=${encodeURIComponent(S.cur)}&path=${encodeURIComponent(rel)}`);
+  const proj = S.cur;
+  const d = await api(`/api/code/tree?project=${encodeURIComponent(proj)}&path=${encodeURIComponent(rel)}`);
+  if (proj !== S.cur) throw new StaleProject();  // the user switched projects while this was loading
   C.dir[rel] = d.entries;
   return d.entries;
 }
@@ -133,9 +136,9 @@ async function loadTree() {
   if (!S.cur) return;
   try {
     if (!C.dir[""]) await loadDir("");
-    for (const rel of [...C.expanded]) if (!C.dir[rel]) { try { await loadDir(rel); } catch { C.expanded.delete(rel); } }
+    for (const rel of [...C.expanded]) if (!C.dir[rel]) { try { await loadDir(rel); } catch (e) { if (e instanceof StaleProject) throw e; C.expanded.delete(rel); } }
     renderTree();
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { if (!(e instanceof StaleProject)) toast(e.message, true); }
 }
 function renderTree() {
   const ul = $("#tree");
@@ -745,8 +748,12 @@ function renderQuick(q) {
 // ============================================================ source control
 async function loadGit() {
   if (!S.cur) return;
-  try { C.git = await api("/api/git/status?project=" + encodeURIComponent(S.cur)); }
-  catch { C.git = { repo: false, git: true }; }
+  const proj = S.cur;
+  let git;
+  try { git = await api("/api/git/status?project=" + encodeURIComponent(proj)); }
+  catch { git = { repo: false, git: true }; }
+  if (proj !== S.cur) return;  // switched projects meanwhile
+  C.git = git;
   const n = C.git.files?.length || 0;
   const badge = $("#gitBadge"); badge.hidden = !n; badge.textContent = n;
   if ($("#tree").children.length) renderTree();
