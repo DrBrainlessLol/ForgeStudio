@@ -26,6 +26,8 @@ stage_app() {  # $1 = prefix dir (e.g. .../usr)
     install -Dm644 "$HERE/icons/$s.png" "$u/share/icons/hicolor/${s}x${s}/apps/forge-studio.png"
   done
   install -Dm644 "$ROOT/README.md" "$u/share/doc/forge-studio/README.md"
+  install -Dm644 "$ROOT/LICENSE" "$u/share/doc/forge-studio/LICENSE"
+  install -Dm644 "$ROOT/THIRD_PARTY_NOTICES.md" "$u/share/doc/forge-studio/THIRD_PARTY_NOTICES.md"
 }
 
 # ============================================================ 1. .deb
@@ -141,7 +143,7 @@ builddate = $BUILDDATE
 packager = Forge Studio
 size = $SIZE
 arch = any
-license = custom
+license = AGPL-3.0-only
 depend = python
 depend = curl
 optdepend = chromium: run in an app window

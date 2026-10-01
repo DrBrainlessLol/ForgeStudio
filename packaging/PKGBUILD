@@ -5,7 +5,7 @@ pkgrel=1
 pkgdesc="AI coding agents with live website preview and Android tools"
 arch=('any')
 url="https://localhost"
-license=('custom')
+license=('AGPL-3.0-only')
 depends=('python' 'curl')
 optdepends=('chromium: run in an app window'
             'android-tools: Android device/build tools (adb)'

@@ -2,7 +2,7 @@ Name:           forge-studio
 Version:        1.0.0
 Release:        1%{?dist}
 Summary:        AI coding agents with live website preview and Android tools
-License:        Proprietary
+License:        AGPL-3.0-only
 URL:            https://localhost
 BuildArch:      noarch
 Source0:        %{name}-%{version}.tar.gz

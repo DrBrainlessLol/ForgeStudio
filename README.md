@@ -9,6 +9,8 @@ It uses only the Python standard library and runs as a desktop web app (Chromium
 - Android Studio: **Tools → External Tools → Open in Forge Studio**
 - Other devices: **Settings → Web App → Use from phones and other computers** (port 8766, needs the link with its token)
 
+> Forge Studio is an independent project. It works with Claude Code, Codex, Gemini CLI and other coding agents, but it is **not made by, affiliated with or endorsed by** Anthropic, OpenAI, Google or any other AI provider. Their names and products are trademarks of their respective owners.
+
 ## Workspaces
 Switch at the top of the window (or **Ctrl+1 / 2 / 3**). The agent chat comes with you in every mode.
 - **Agent**: projects and running/finished agent tasks on the left, the chat in the middle (a "What should we build?" home screen with suggestions when it's empty), and Preview / Processes on the right.
@@ -93,3 +95,12 @@ See `packaging/README.md` for details.
 ## Notes
 - Data lives in `~/.config/forge-studio/`: token, config, and `profiles/<id>/` with chats, uploads and keys (mode 600).
 - Server log: `~/.config/forge-studio/server.log`. Port: `FORGE_STUDIO_PORT` (default 8765; LAN uses +1).
+
+## License
+Copyright © 2026 DrBrainlessLol.
+
+Forge Studio is free software under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). You can use, study, change and share it. If you distribute a modified version, or let other people use a modified version over a network, you must make your source code available under the same license.
+
+**Commercial licenses** are available for companies that want to use or embed Forge Studio without the AGPL's obligations. Open an issue or contact the maintainer on GitHub.
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). First-time contributors sign a short [Contributor License Agreement](CLA.md). Third-party material is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

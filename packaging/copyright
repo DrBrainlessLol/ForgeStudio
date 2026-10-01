@@ -1,7 +1,17 @@
-Forge Studio
-A local desktop studio for AI coding agents.
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Forge Studio
+Source: https://github.com/DrBrainlessLol/ForgeStudio
 
 Files: *
-This software is provided as-is for personal use.
-Bundled third-party runtime dependencies (python3, chromium, adb, node, scrcpy)
-are not included and remain under their own licenses.
+Copyright: 2026 DrBrainlessLol
+License: AGPL-3.0-only
+ Forge Studio is free software: you can redistribute it and/or modify it under
+ the terms of the GNU Affero General Public License version 3 as published by
+ the Free Software Foundation. The full text is in
+ /usr/share/doc/forge-studio/LICENSE. Commercial licenses are also available
+ from the copyright holder.
+
+Files: static/icons.svg
+Copyright: 2013-2022 Cole Bemis (Feather), 2022 Lucide Contributors
+License: ISC
+ See /usr/share/doc/forge-studio/THIRD_PARTY_NOTICES.md.
