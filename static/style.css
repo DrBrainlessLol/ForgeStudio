@@ -810,3 +810,6 @@ body:not([data-mode="agent"]) .layout.no-agent .chat, body:not([data-mode="agent
 .checks .check { color: var(--text); }
 /* the message box grows with what you type but never takes over the chat */
 .composer textarea { max-height: 30vh; }
+/* long chats: skip layout/paint for messages that are off screen */
+.messages > .msg, .messages > .tool, .messages > .approval.done, .messages > .meta { content-visibility: auto; contain-intrinsic-size: auto 60px; }
+.more-msgs { align-self: center; color: var(--accent); }

@@ -186,7 +186,7 @@ function renderItem(it) {
     if (it.files?.length) {
       const f = document.createElement("div"); f.className = "msg-files";
       f.innerHTML = it.files.map((x) => x.kind === "image"
-        ? `<a href="${fileUrl(x.path)}" target="_blank"><img src="${fileUrl(x.path)}" alt="${esc(x.name)}"></a>`
+        ? `<a href="${fileUrl(x.path)}" target="_blank"><img src="${fileUrl(x.path)}" alt="${esc(x.name)}" loading="lazy" decoding="async"></a>`
         : `<a class="file-chip" href="${fileUrl(x.path, true)}">${ic("file")}<span>${esc(x.name)}</span></a>`).join("");
       el.append(f);
     }
@@ -200,14 +200,21 @@ function renderItem(it) {
     const inProj = fp && S.cur && (fp === S.cur || fp.startsWith(S.cur + "/") || !fp.startsWith("/"));
     const actions = fp && it.result != null && !it.error
       ? `<span class="tool-actions">${inProj ? `<a data-edit>${ic("code")}Edit</a>` : ""}<a href="${fileUrl(fp)}" target="_blank" onclick="event.stopPropagation()">${ic("external")}Open</a><a href="${fileUrl(fp, true)}" onclick="event.stopPropagation()">${ic("download")}Download</a></span>` : "";
-    el.innerHTML = `<summary><span class="tname">${esc(it.name)}</span><span class="targ">${esc(toolArg(it.input))}</span>${actions}<span class="tstate ${state[0]}">${state[1]}</span></summary>${toolBody(it)}`;
-    el.ontoggle = () => (it._open = el.open);
+    el.innerHTML = `<summary><span class="tname">${esc(it.name)}</span><span class="targ">${esc(toolArg(it.input).slice(0, 300))}</span>${actions}<span class="tstate ${state[0]}">${state[1]}</span></summary>`;
+    // a long chat has hundreds of these; only an opened card pays for its command / output
+    const fill = () => {
+      if (el.dataset.filled) return;
+      el.dataset.filled = "1";
+      el.insertAdjacentHTML("beforeend", toolBody(it));
+      el.querySelectorAll(".tcopy").forEach((b) => b.addEventListener("click", (e) => {
+        e.stopPropagation(); e.preventDefault();
+        const pre = b.closest(".tsec").querySelector("pre");
+        navigator.clipboard.writeText(pre.textContent).then(() => toast("Copied")).catch(() => toast("Copy failed", true));
+      }));
+    };
+    if (el.open) fill();
+    el.ontoggle = () => { it._open = el.open; if (el.open) fill(); };
     el.querySelector("[data-edit]")?.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); if (typeof openInEditor === "function") openInEditor(fp); });
-    el.querySelectorAll(".tcopy").forEach((b) => b.addEventListener("click", (e) => {
-      e.stopPropagation(); e.preventDefault();
-      const pre = b.closest(".tsec").querySelector("pre");
-      navigator.clipboard.writeText(pre.textContent).then(() => toast("Copied")).catch(() => toast("Copy failed", true));
-    }));
   } else if (it.k === "approval") el = renderApproval(it);
   else if (it.k === "meta") { el = document.createElement("div"); el.className = "meta" + (it.err ? " err" : ""); el.textContent = it.text; }
   it.el = el;
@@ -257,7 +264,10 @@ function renderApproval(it) {
 }
 
 // apply one chat event to an item list; returns {pushed, changed} for live rendering
+// id → item index per chat, so replaying a long log isn't quadratic
+const itemIdx = (items) => items._idx || Object.defineProperty(items, "_idx", { value: new Map() })._idx;
 function applyEvent(items, ev) {
+  const idx = itemIdx(items);
   const last = items[items.length - 1];
   const pushed = [], changed = [];
   const push = (it) => { items.push(it); pushed.push(it); return it; };
@@ -272,19 +282,19 @@ function applyEvent(items, ev) {
       break;
     }
     case "tools":
-      for (const b of ev.blocks) if (!items.some((i) => i.k === "tool" && i.id === b.id)) push({ k: "tool", id: b.id, name: b.name, input: b.input, result: null });
+      for (const b of ev.blocks) if (!idx.has("tool:" + b.id)) idx.set("tool:" + b.id, push({ k: "tool", id: b.id, name: b.name, input: b.input, result: null }));
       break;
     case "tool_results":
       for (const r of ev.results) {
-        const it = items.find((i) => i.k === "tool" && i.id === r.id);
+        const it = idx.get("tool:" + r.id);
         if (it) { it.result = r.content; it.error = r.error; changed.push(it); }
       }
       break;
     case "approval":
-      if (!items.some((i) => i.k === "approval" && i.id === ev.id)) push({ k: "approval", id: ev.id, tool: ev.tool, input: ev.input, description: ev.description, hints: ev.hints });
+      if (!idx.has("approval:" + ev.id)) idx.set("approval:" + ev.id, push({ k: "approval", id: ev.id, tool: ev.tool, input: ev.input, description: ev.description, hints: ev.hints }));
       break;
     case "approval_done": {
-      const it = items.find((i) => i.k === "approval" && i.id === ev.id);
+      const it = idx.get("approval:" + ev.id);
       if (it) { it.decision = ev.decision; changed.push(it); }
       break;
     }
@@ -346,10 +356,26 @@ function renderChat() {
   $("#homeChips").hidden = !home;
   if (home) { renderHome(box); updateBusy(); return; }
   if (!items.length) box.innerHTML = `<div class="empty"><h2>${esc(project()?.name)}</h2><p>Ask the agent to build, fix or explain something. Attach screenshots, designs or files with the clip.</p><p class="dim">Earlier conversations are in the menu at the top.</p></div>`;
-  for (const it of items) box.append(renderItem(it));
+  const start = Math.max(0, items.length - (S.chatWindow || CHAT_WINDOW));
+  if (start) {
+    const more = document.createElement("button");
+    more.className = "btn small plain more-msgs";
+    more.textContent = `Show ${Math.min(start, CHAT_WINDOW)} earlier messages (${start} hidden)`;
+    more.onclick = () => {
+      const fromBottom = box.scrollHeight - box.scrollTop;
+      S.chatWindow = (S.chatWindow || CHAT_WINDOW) + CHAT_WINDOW;
+      renderChat();
+      box.scrollTop = box.scrollHeight - fromBottom;  // keep the view where it was
+    };
+    box.append(more);
+  }
+  const frag = document.createDocumentFragment();
+  for (let i = start; i < items.length; i++) frag.append(renderItem(items[i]));
+  box.append(frag);
   updateBusy();
   box.scrollTop = box.scrollHeight;
 }
+const CHAT_WINDOW = 150;  // items rendered at once; long chats grow on demand
 const pending = new Set();
 function onChat(cid, projectPath, ev) {
   if (!S.items[cid]) {
@@ -407,6 +433,7 @@ function updateBusy() {
 }
 async function openChat(cid) {
   if (!S.cur) return;
+  S.chatWindow = 0;
   S.curChat[S.cur] = cid;
   if (cid && !S.loaded[cid]) {
     const d = await api("/api/chat/log?id=" + cid);

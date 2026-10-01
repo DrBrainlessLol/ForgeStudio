@@ -1283,6 +1283,23 @@ def clip(s, n=TOOL_OUT_LIMIT):
     return s if len(s) <= n else s[:n] + f"\n… (+{len(s) - n:,} more characters — truncated)"
 
 
+UI_TEXT_LIMIT = 16_000  # per text field when sending a chat log to the UI (the log on disk stays complete)
+
+
+def trim_event(ev):
+    """Shorten huge tool inputs/outputs for display: a 2.7 MB chat log becomes a fraction of that to load."""
+    def cut(v):
+        if isinstance(v, str) and len(v) > UI_TEXT_LIMIT:
+            half = UI_TEXT_LIMIT // 2
+            return f"{v[:half]}\n\n… {len(v) - UI_TEXT_LIMIT:,} characters not shown …\n\n{v[-half:]}"
+        if isinstance(v, dict):
+            return {k: cut(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [cut(x) for x in v]
+        return v
+    return cut(ev) if ev.get("type") in ("tools", "tool_results", "approval") else ev
+
+
 def slim_event(ev):
     t = ev.get("type")
     sub = bool(ev.get("parent_tool_use_id"))
@@ -2550,7 +2567,7 @@ class Handler(BaseHTTPRequestHandler):
                 if cid not in prof.data["chats"]:
                     return self._send(404, {"error": "chat not found"})
                 f = prof.chat_log(cid)
-                events = [json.loads(l) for l in f.read_text().splitlines() if l.strip()] if f.exists() else []
+                events = [trim_event(json.loads(l)) for l in f.read_text().splitlines() if l.strip()] if f.exists() else []
                 pend = [{"type": "approval", "id": k, "tool": v["tool"], "input": v["input"], "hints": risk_hints(v["tool"], v["input"], prof.data["chats"][cid]["project"])}
                         for k, v in APPROVALS.items() if v["chat"] == cid]
                 return self._send(200, {"chat": prof.data["chats"][cid], "events": events, "pending": pend,
