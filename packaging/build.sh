@@ -3,7 +3,7 @@
 # Produces (into ./dist): a .deb, a universal .tar.gz + install.sh, an Arch .pkg.tar.zst,
 # and copies of PKGBUILD / forge-studio.spec for building on those distros.
 set -euo pipefail
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.0.1}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 DIST="$HERE/dist"
@@ -43,8 +43,7 @@ Section: devel
 Priority: optional
 Architecture: all
 Depends: python3 (>= 3.8), curl
-Recommends: chromium | chromium-browser | google-chrome-stable
-Suggests: adb, default-jre, nodejs, npm, scrcpy
+Suggests: chromium | google-chrome-stable, adb, default-jre, nodejs, npm, scrcpy, git
 Installed-Size: $INSTALLED_KB
 Maintainer: Forge Studio <forge@localhost>
 Description: Lightweight studio for AI coding agents with an editor, website preview and Android tools

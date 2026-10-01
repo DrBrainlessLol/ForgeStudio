@@ -60,10 +60,10 @@ A built-in editor and Git client, no external tools bundled:
 
 ## Install / packaging
 Prebuilt packages are produced by `packaging/build.sh` into `packaging/dist/`:
-- **Debian / Ubuntu / Deepin:** `sudo apt install ./forge-studio_1.0.0_all.deb`
-- **Arch:** `sudo pacman -U forge-studio-1.0.0-1-any.pkg.tar.zst` (or `makepkg -si` with the `PKGBUILD`)
+- **Debian / Ubuntu / Deepin:** `sudo apt install ./forge-studio_1.0.1_all.deb`
+- **Arch:** `sudo pacman -U forge-studio-1.0.1-1-any.pkg.tar.zst` (or `makepkg -si` with the `PKGBUILD`)
 - **Fedora / openSUSE:** build the RPM with `forge-studio.spec`
-- **Any distro:** extract `forge-studio-1.0.0.tar.gz` and run `sudo ./install.sh` (or `./install.sh --user`)
+- **Any distro:** extract `forge-studio-1.0.1.tar.gz` and run `sudo ./install.sh` (or `./install.sh --user`)
 
 See `packaging/README.md` for details.
 

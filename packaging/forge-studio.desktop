@@ -2,7 +2,7 @@
 Type=Application
 Name=Forge Studio
 GenericName=AI Coding Studio
-Comment=AI coding agents with live website preview and Android tools
+Comment=AI coding agents with an editor, website preview and Android tools
 Exec=forge-studio %U
 Icon=forge-studio
 Terminal=false
