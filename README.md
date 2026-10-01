@@ -1,7 +1,13 @@
 # Forge Studio
 
-A desktop studio for AI coding agents, built around Claude Code and working with any CLI agent. It includes chat with approvals, attachments and history, a live website preview, and Android build, run and live-debug tools.
-It uses only the Python standard library and runs as a desktop web app (Chromium app window, installable PWA, optional LAN access).
+A lightweight desktop studio for AI coding agents. Chat with Claude Code, Codex or any CLI agent (or the built-in API-key engine), then switch between three workspaces: **Agent** (chat, tasks and live website preview), **Editor** (a familiar IDE layout with explorer, search and Git) and **Android** (Gradle builds, new-app wizard, live phone screen and logcat). The agent comes with you in every mode.
+
+It uses only the Python standard library and plain HTML/CSS/JS with no build step, and runs as a desktop web app (Chromium app window, installable PWA, optional LAN access).
+
+## Requirements
+- Python 3.8+ and Chrome / Chromium (Linux; other platforms untested)
+- An agent: [Claude Code](https://docs.claude.com/en/docs/claude-code) (recommended), Codex or another CLI — or just an API key for the built-in engine
+- Optional: Git (Editor's source control), Node.js (dev-server previews), Android SDK + JDK 17+ (Android mode), [scrcpy](https://github.com/Genymobile/scrcpy) (live phone screen)
 
 ## Launch
 - Desktop / app menu: **Forge Studio**
@@ -12,13 +18,16 @@ It uses only the Python standard library and runs as a desktop web app (Chromium
 > Forge Studio is an independent project. It works with Claude Code, Codex, Gemini CLI and other coding agents, but it is **not made by, affiliated with or endorsed by** Anthropic, OpenAI, Google or any other AI provider. Their names and products are trademarks of their respective owners.
 
 ## Workspaces
-Switch at the top of the window (or **Ctrl+1 / 2 / 3**). The agent chat comes with you in every mode.
+Switch at the top of the window (or **Ctrl+1 / 2 / 3**). The agent chat comes with you in every mode; in Editor and Android it docks on the right and **Ctrl+J** (or the panel buttons) hides or shows it. Switch projects from the title bar.
 - **Agent**: projects and running/finished agent tasks on the left, the chat in the middle (a "What should we build?" home screen with suggestions when it's empty), and Preview / Processes on the right.
 - **Editor**: a familiar IDE layout. Explorer, search and source control on the left, tabbed code editor in the middle, the agent docked on the right.
 - **Android**: a run bar (module, debug/release, device, Run / Restart / Stop / Build), then **Run & Logcat** (screen mirror + app logcat), **Build** output, **Gradle** tasks and toolchain, and **Devices** (emulators, Wi-Fi pairing, port forwarding).
   - **New app** creates a Compose or Views app with Kotlin DSL, a version catalog, Git and a real Gradle wrapper (AGP 8.7.3 / Gradle 8.10.2 / Kotlin 2.0.21).
   - Projects without `gradlew` get an **Add Gradle wrapper** button.
   - Gradle runs on a JDK it supports, picked automatically (e.g. JDK 17 for Gradle 8.10 even if Android Studio's bundled JDK is newer).
+  - **Live screen**: the phone's display streams as H.264 from its hardware encoder (via your installed scrcpy) and is decoded in the browser, up to 120 fps. Click to tap, drag to swipe; screenshots are the fallback without scrcpy.
+  - App-only logcat with level/search filters, crash and ANR detection with **Ask to fix**, and **Ask** to send the visible log to the agent.
+  - The Android tab only appears for Android Gradle projects.
 
 The status bar shows the Git branch, the project, the agent's state and (in Android mode) the device and Gradle version.
 
@@ -37,14 +46,15 @@ The **Built-in** engine is what makes Forge Studio work standalone: pick it as t
 
 Each provider has an **API style** setting in Settings → Models & Keys; the presets set it for you.
 
-## Code & Git
+## Editor mode: code & Git
 
-The right panel has a **Code** tab — a built-in editor and Git client, no external tools bundled:
+A built-in editor and Git client, no external tools bundled:
 - **Explorer**: lazy-loading file tree with Git status colors, new file/folder, rename (F2), delete (to Trash), drag-to-move, and a right-click menu (copy path, open/download, ask the agent).
 - **Editor**: multi-tab, per-file undo, syntax highlighting for common languages, auto-indent, Tab/Shift+Tab, Ctrl+/ to comment, Ctrl+S to save (with a stale-file conflict prompt), and a status bar (line/column, language, branch).
 - **Search** (Ctrl+Shift+F): project-wide, case/regex toggles, grouped results.
 - **Quick open** (Ctrl+P): fuzzy file finder.
-- **Source Control** (Ctrl+Shift+G): stage/unstage/discard, commit (uses your profile name/email when Git has no identity), branch switch/create, pull/push/fetch, diffs, and recent commits. Initialize or clone a repo from here.
+- **Source Control** (Ctrl+Shift+G): stage/unstage/discard, commit (uses your profile name/email when Git has no identity), branch switch/create, pull/push/fetch, diffs, and recent commits. Initialize or clone a repo from here. The button in the commit box drafts a commit message from your changes with your configured model.
+- **Ask agent**: send the open file or the selected lines to the agent.
 - **Clone / New project**: from the sidebar ＋ (right-click) or the welcome tiles.
 - When the agent edits files in the open project, the editor reloads them live and the Git panel updates.
 
@@ -72,25 +82,28 @@ See `packaging/README.md` for details.
 - Attach images and files with the clip, by pasting, or by drag & drop. Images go to the model directly; other files are passed as paths.
 - Files the agent writes get **Open / Download** buttons, and file paths in replies get a download link.
 - **History** lets you reopen, rename and delete conversations. They're per profile.
+- **Tasks** in the Agent sidebar show which chats are working and which just finished, across projects.
+- Tool cards expand to the full command and output, with copy buttons. Long chats show the latest 150 messages with **Show earlier messages** to load more, so they open quickly.
+- **Notifications**: a short chime and, when Forge Studio isn't the active window, a system notification when the agent needs approval, a task finishes, a Gradle build ends or your app crashes. Each can be turned off in Settings → General.
+
+## Plugins
+Settings → Plugins installs plugins from a folder or a Git URL, or scaffolds a new one. A plugin is a folder with `.claude-plugin/plugin.json` and optional `commands/`, `agents/`, `skills/`, `.mcp.json` and `README.md`. Claude Code loads them natively; the built-in engine supports commands, agents and skills (not MCP). They live in `~/.config/forge-studio/plugins`.
 
 ## Profiles & settings
 - **Profiles**: local (optional PIN) or Google sign-in (one-time Desktop-app OAuth client setup).
 - **Settings** sections:
-  - General: light / dark (AMOLED) / auto, accent color, density, default permissions.
-  - Profile & Account.
+  - General: light / dark (AMOLED) / auto, accent color, density, default permissions, notifications and sound, hiding test profiles.
+  - Profile & Account (including marking a profile as a test profile).
   - Agents.
+  - Plugins.
   - Models & Keys: your own Anthropic key, DeepSeek, OpenRouter, Kimi, GLM, Ollama, or custom.
   - Web App.
   - Android.
 
-## Preview & Android
-- **Preview**: static server with live reload, or any dev command (URL auto-detected, `npm install` on first run). Device sizes are available.
-- **Android** (Android Studio need not be open):
-  - Run / Restart / Build.
-  - Live debug: the phone's screen next to app-only logcat.
-  - Crash detection with **Ask to fix**.
-  - scrcpy smooth mirror.
-  - Wi-Fi pairing and `adb reverse`.
+## Preview
+- **Preview** (Agent mode): static server with live reload, or any dev command (URL auto-detected, `npm install` on first run). Device sizes are available.
+- **Processes** lists dev servers, Gradle builds, logcat, emulators and clones, with their logs.
+- Android Studio doesn't need to be open for anything in Android mode; **Smooth window** also opens scrcpy in its own window.
 
 ## Notes
 - Data lives in `~/.config/forge-studio/`: token, config, and `profiles/<id>/` with chats, uploads and keys (mode 600).
