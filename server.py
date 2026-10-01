@@ -20,6 +20,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -241,7 +242,7 @@ def tool_env():
 def android_info(path: Path):
     if not ((path / "settings.gradle").exists() or (path / "settings.gradle.kts").exists()):
         return None
-    info = {"gradlew": (path / "gradlew").exists(), "modules": []}
+    info = {"gradlew": (path / "gradlew").exists(), "gradle": wrapper_version(path), "modules": []}
     for child in sorted(path.iterdir()):
         if not child.is_dir() or child.name in SKIP_DIRS:
             continue
@@ -251,7 +252,10 @@ def android_info(path: Path):
                 text = bf.read_text(errors="ignore")
                 if "com.android.application" in text or "android.application" in text:
                     m = re.search(r'applicationId\s*=?\s*["\']([\w.]+)["\']', text)
-                    info["modules"].append({"name": child.name, "applicationId": m.group(1) if m else None})
+                    num = lambda k: (re.search(k + r'\s*=?\s*(\d+)', text) or [None, None])[1]  # noqa: E731
+                    info["modules"].append({"name": child.name, "applicationId": m.group(1) if m else None,
+                                            "minSdk": num("minSdk"), "targetSdk": num("targetSdk"), "compileSdk": num("compileSdk"),
+                                            "compose": "compose = true" in text or "kotlin.compose" in text})
                 break
     return info
 
@@ -1449,6 +1453,76 @@ def adb(*args, serial=None, timeout=20):
     return subprocess.run(cmd, capture_output=True, timeout=timeout, env=tool_env())
 
 
+# ---- live screen stream: scrcpy's on-device H.264 encoder, relayed to the browser (decoded there with WebCodecs)
+
+_scrcpy_version = {}
+
+
+def scrcpy_server():
+    """(server jar path, version) of an installed scrcpy, or (None, None)."""
+    exe = scrcpy_path()
+    cands = [os.environ.get("SCRCPY_SERVER_PATH"), exe and str(Path(exe).resolve().parent / "scrcpy-server"),
+             "/usr/share/scrcpy/scrcpy-server", "/usr/local/share/scrcpy/scrcpy-server"]
+    jar = next((c for c in cands if c and Path(c).is_file()), None)
+    if not jar or not exe:
+        return None, None
+    if exe not in _scrcpy_version:
+        r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10)
+        m = re.search(r"scrcpy (\d+\.\d+(?:\.\d+)?)", r.stdout)
+        _scrcpy_version[exe] = m.group(1) if m else None
+    return jar, _scrcpy_version[exe]
+
+
+def device_size(serial):
+    out = adb("shell", "wm", "size", serial=serial).stdout.decode(errors="replace")
+    m = re.findall(r"(\d+)x(\d+)", out)
+    return m[-1] if m else None  # the override size, if any, is listed last
+
+
+def open_screen_stream(serial, max_fps=120, max_size=1600, bitrate=8_000_000):
+    """Start scrcpy-server on the device and return (socket, cleanup). The socket carries scrcpy's video stream."""
+    jar, version = scrcpy_server()
+    if not jar or not version:
+        raise ValueError("scrcpy isn't installed — the live stream uses its on-device encoder")
+    a = adb_path()
+    target = ["-s", serial] if serial else []
+    r = adb("push", jar, "/data/local/tmp/scrcpy-server.jar", serial=serial, timeout=30)
+    if r.returncode:
+        raise ValueError((r.stderr or r.stdout).decode(errors="replace")[:300] or "adb push failed")
+    scid = secrets.randbelow(0x7FFFFFFF)
+    port = free_port()
+    adb("forward", f"tcp:{port}", f"localabstract:scrcpy_{scid:08x}", serial=serial)
+    proc = subprocess.Popen([a, *target, "shell", "CLASSPATH=/data/local/tmp/scrcpy-server.jar", "app_process", "/",
+                             "com.genymobile.scrcpy.Server", version, f"scid={scid:08x}", "tunnel_forward=true",
+                             "audio=false", "control=false", f"max_fps={max_fps}", f"max_size={max_size}",
+                             f"video_bit_rate={bitrate}", "video_codec=h264", "send_device_meta=false", "log_level=warn"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=tool_env())
+
+    def cleanup():
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        adb("forward", "--remove", f"tcp:{port}", serial=serial)
+    # the forward accepts before the server listens; scrcpy sends one dummy byte once it's really connected
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            cleanup()
+            raise ValueError("The device refused to start the screen stream")
+        try:
+            s = socket.create_connection(("127.0.0.1", port), timeout=2)
+            if s.recv(1):
+                s.settimeout(None)
+                return s, cleanup
+            s.close()
+        except OSError:
+            pass
+        time.sleep(0.1)
+    cleanup()
+    raise ValueError("Timed out starting the screen stream")
+
+
 def list_devices():
     out = []
     try:
@@ -1476,11 +1550,11 @@ def list_devices():
 def gradle(project, task, serial=None, then=None):
     p = Path(project)
     if not (p / "gradlew").exists():
-        raise ValueError("No gradlew wrapper in this project - open it once in Android Studio to generate it.")
+        raise ValueError("This project has no Gradle wrapper yet - press “Add Gradle wrapper” in Android mode.")
     os.chmod(p / "gradlew", 0o755)
     if running("gradle", project):
         raise ValueError("A Gradle task is already running for this project.")
-    env = tool_env()
+    env = gradle_env(wrapper_version(p))
     if serial:
         env["ANDROID_SERIAL"] = serial
     return start_proc(["./gradlew", *task.split(), "--console=plain"], project, "gradle", project,
@@ -1507,6 +1581,408 @@ def start_logcat(project, serial, app_id=None, scope="app"):
         cmd += [f"--uid={m.group(1)}"]
         label = f"logcat: {app_id}"
     return start_proc(cmd, project, "logcat", project, label, meta={"scope": scope, "app": app_id})
+
+
+# ---------------------------------------------------------------- android: new apps & gradle wrapper
+
+# A known-good toolchain set (AGP 8.7 needs Gradle 8.9+ and JDK 17).
+GRADLE_VERSION = "8.10.2"
+AGP_VERSION = "8.7.3"
+KOTLIN_VERSION = "2.0.21"
+
+
+def java_major(home):
+    m = re.search(r'JAVA_VERSION="(?:1\.)?(\d+)', (Path(home) / "release").read_text()) if (Path(home) / "release").exists() else None
+    return int(m.group(1)) if m else None
+
+
+def jdk_homes():
+    """Installed JDKs as {home: major}, from JAVA_HOME, Android Studio's JBR and the usual install folders."""
+    cands = [os.environ.get("JAVA_HOME"), find_java_home()]
+    for pattern in ("/usr/lib/jvm/*", "/opt/*/jbr", "/opt/apps/*/files/jbr", str(HOME / ".jdks/*"),
+                    str(HOME / ".sdkman/candidates/java/*"), str(HOME / "android-studio/jbr")):
+        cands += [str(p) for p in Path("/").glob(pattern.lstrip("/"))]
+    out = {}
+    for c in cands:
+        if c and (Path(c) / "bin" / "java").exists():
+            home = str(Path(c).resolve())
+            if home not in out and (v := java_major(home)):
+                out[home] = v
+    return out
+
+
+def java_for_gradle(gradle_version):
+    """Newest JDK (17+) that this Gradle version can run on; Studio's bundled JBR is often too new for older Gradle."""
+    v = tuple(int(x) for x in re.findall(r"\d+", gradle_version or GRADLE_VERSION)[:2]) or (8, 10)
+    limit = 25 if v >= (9, 1) else 24 if v >= (8, 14) else 23 if v >= (8, 10) else 22 if v >= (8, 8) else 21 if v >= (8, 5) else 17
+    ok = {h: m for h, m in jdk_homes().items() if 17 <= m <= limit}
+    return max(ok, key=ok.get) if ok else find_java_home()
+
+
+def gradle_env(gradle_version):
+    env = tool_env()
+    jh = java_for_gradle(gradle_version)
+    if jh:
+        env["JAVA_HOME"] = jh
+        env["PATH"] = f"{jh}/bin:{env['PATH']}"
+    return env
+
+
+def gradle_launcher(want=GRADLE_VERSION):
+    """A Gradle binary to generate wrappers with: an unpacked wrapper distribution (prefer `want`) or a system gradle."""
+    dists = sorted((HOME / ".gradle" / "wrapper" / "dists").glob("gradle-*-bin/*/gradle-*/bin/gradle"))
+    exact = [d for d in dists if d.parent.parent.name == f"gradle-{want}"]
+    for cand in exact + dists:
+        if (cand.parent.parent.parent / f"gradle-{cand.parent.parent.name[7:]}-bin.zip.ok").exists():
+            return str(cand)
+    return shutil.which("gradle", path=tool_env()["PATH"])
+
+
+def android_platforms():
+    sdk = find_sdk()
+    found = []
+    for p in (sdk / "platforms").glob("android-*") if sdk else []:
+        m = re.fullmatch(r"android-(\d+)", p.name)
+        if m and (p / "android.jar").exists():
+            found.append(int(m.group(1)))
+    return sorted(found)
+
+
+def wrapper_version(project: Path):
+    props = project / "gradle" / "wrapper" / "gradle-wrapper.properties"
+    m = re.search(r"gradle-([\d.]+(?:-rc-\d+)?)-(?:bin|all)\.zip", props.read_text()) if props.exists() else None
+    return m.group(1) if m else GRADLE_VERSION
+
+
+def add_wrapper(project, version=None, then=None, label=None):
+    """Generate gradlew + gradle/wrapper in a scratch dir (so the Android build isn't configured) and copy it in."""
+    p = Path(project)
+    version = version or wrapper_version(p)
+    launcher = gradle_launcher(version)
+    if not launcher:
+        raise ValueError("No Gradle found to create the wrapper. Install Gradle (e.g. `sdk install gradle`) "
+                         "or open the project once in Android Studio.")
+    scratch = Path(tempfile.mkdtemp(prefix="forge-wrapper-"))
+    (scratch / "settings.gradle").write_text("rootProject.name = 'wrapper'\n")
+
+    def done(code):
+        try:
+            if code == 0:
+                for rel in ("gradlew", "gradlew.bat", "gradle/wrapper/gradle-wrapper.jar", "gradle/wrapper/gradle-wrapper.properties"):
+                    dst = p / rel
+                    if rel.endswith(".properties") and dst.exists():
+                        continue  # keep the project's own distribution settings
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(scratch / rel, dst)
+                os.chmod(p / "gradlew", 0o755)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+            if then:
+                then(code)
+    m = re.search(r"/gradle-([\d.]+)/bin/gradle$", launcher)
+    env = gradle_env(m.group(1) if m else version)
+    return start_proc([launcher, "wrapper", "--gradle-version", version, "--distribution-type", "bin", "--offline",
+                       "--console=plain", "--no-daemon"], str(scratch), "gradle", str(p), label or f"gradle wrapper {version}",
+                      env=env, on_exit=done)
+
+
+def new_android_app(parent, name, package, template="compose", min_sdk=24):
+    name = (name or "").strip()
+    if not re.fullmatch(r"[A-Za-z][\w -]{0,60}", name):
+        raise ValueError("App name: letters, numbers, spaces, - or _ (start with a letter)")
+    package = (package or "").strip()
+    if not re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+", package):
+        raise ValueError("Package name like com.example.myapp (lowercase, at least two parts)")
+    plats = android_platforms()
+    if not plats:
+        raise ValueError("No Android SDK platform found. Install one in Android Studio → SDK Manager.")
+    compile_sdk = 34 if 34 in plats else max(plats)
+    min_sdk = max(21, min(int(min_sdk or 24), compile_sdk))
+    dest = Path(parent or HOME / "AndroidStudioProjects").expanduser().resolve() / re.sub(r"\s+", "", name)
+    if dest.exists():
+        raise ValueError(f"{dest} already exists")
+    compose = template != "views"
+    files = android_template(name, package, compose, compile_sdk, min_sdk)
+    for rel, text in files.items():
+        f = dest / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+    sdk = find_sdk()
+    (dest / "local.properties").write_text(f"sdk.dir={sdk}\n")
+    if shutil.which("git"):
+        git(dest, "init", "-b", "main", check=False)
+    CONFIG["projects"].insert(0, str(dest))
+    CONFIG["hidden"] = [h for h in CONFIG["hidden"] if h != str(dest)]
+    save_config()
+
+    def ready(code):
+        if code == 0:
+            emit({"type": "projects_changed", "select": str(dest), "text": f"{name} is ready — press Run to build it"})
+        else:
+            emit({"type": "toast", "text": f"Created {name}, but the Gradle wrapper step failed — see the build log", "err": True})
+    add_wrapper(str(dest), GRADLE_VERSION, then=ready, label=f"new app {name}: gradle wrapper")
+    return {"path": str(dest), "compileSdk": compile_sdk}
+
+
+def android_template(name, package, compose, compile_sdk, min_sdk):
+    pkg_dir = "app/src/main/java/" + package.replace(".", "/")
+    theme = "Theme.Material3.DayNight.NoActionBar" if not compose else "android:Theme.Material.Light.NoActionBar"
+    libs = f"""[versions]
+agp = "{AGP_VERSION}"
+kotlin = "{KOTLIN_VERSION}"
+coreKtx = "1.12.0"
+lifecycle = "2.7.0"
+activityCompose = "1.8.2"
+composeBom = "2024.05.00"
+appcompat = "1.6.1"
+material = "1.10.0"
+
+[libraries]
+androidx-core-ktx = {{ group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }}
+androidx-lifecycle-runtime-ktx = {{ group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }}
+androidx-activity-compose = {{ group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }}
+androidx-compose-bom = {{ group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }}
+androidx-ui = {{ group = "androidx.compose.ui", name = "ui" }}
+androidx-ui-graphics = {{ group = "androidx.compose.ui", name = "ui-graphics" }}
+androidx-ui-tooling = {{ group = "androidx.compose.ui", name = "ui-tooling" }}
+androidx-ui-tooling-preview = {{ group = "androidx.compose.ui", name = "ui-tooling-preview" }}
+androidx-material3 = {{ group = "androidx.compose.material3", name = "material3" }}
+androidx-appcompat = {{ group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }}
+material = {{ group = "com.google.android.material", name = "material", version.ref = "material" }}
+
+[plugins]
+android-application = {{ id = "com.android.application", version.ref = "agp" }}
+kotlin-android = {{ id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }}
+kotlin-compose = {{ id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }}
+"""
+    root_build = """plugins {
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.kotlin.android) apply false
+    alias(libs.plugins.kotlin.compose) apply false
+}
+"""
+    settings = f"""pluginManagement {{
+    repositories {{
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }}
+}}
+dependencyResolutionManagement {{
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {{
+        google()
+        mavenCentral()
+    }}
+}}
+
+rootProject.name = "{name}"
+include(":app")
+"""
+    compose_bits = ("    alias(libs.plugins.kotlin.compose)\n", "\n    buildFeatures {\n        compose = true\n    }",
+                    """    implementation(libs.androidx.activity.compose)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.material3)
+    debugImplementation(libs.androidx.ui.tooling)
+""") if compose else ("", "", "    implementation(libs.androidx.appcompat)\n    implementation(libs.material)\n")
+    app_build = f"""plugins {{
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+{compose_bits[0]}}}
+
+android {{
+    namespace = "{package}"
+    compileSdk = {compile_sdk}
+
+    defaultConfig {{
+        applicationId = "{package}"
+        minSdk = {min_sdk}
+        targetSdk = {compile_sdk}
+        versionCode = 1
+        versionName = "1.0"
+    }}
+
+    buildTypes {{
+        release {{
+            isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }}
+    }}
+    compileOptions {{
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }}
+    kotlinOptions {{
+        jvmTarget = "17"
+    }}{compose_bits[1]}
+}}
+
+dependencies {{
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+{compose_bits[2]}}}
+"""
+    manifest = f"""<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.App">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
+"""
+    if compose:
+        activity = f"""package {package}
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
+
+class MainActivity : ComponentActivity() {{
+    override fun onCreate(savedInstanceState: Bundle?) {{
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {{
+            MaterialTheme {{
+                Scaffold(modifier = Modifier.fillMaxSize()) {{ padding ->
+                    Greeting(Modifier.padding(padding))
+                }}
+            }}
+        }}
+    }}
+}}
+
+@Composable
+fun Greeting(modifier: Modifier = Modifier) {{
+    var taps by remember {{ mutableIntStateOf(0) }}
+    Column(
+        modifier = modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {{
+        Text("Hello from {name}!", style = MaterialTheme.typography.headlineMedium)
+        Button(onClick = {{ taps++ }}) {{ Text("Tapped $taps times") }}
+    }}
+}}
+
+@Preview(showBackground = true)
+@Composable
+fun GreetingPreview() {{
+    MaterialTheme {{ Greeting() }}
+}}
+"""
+    else:
+        activity = f"""package {package}
+
+import android.os.Bundle
+import android.widget.Button
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
+
+class MainActivity : AppCompatActivity() {{
+    private var taps = 0
+
+    override fun onCreate(savedInstanceState: Bundle?) {{
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        val label = findViewById<TextView>(R.id.label)
+        findViewById<Button>(R.id.button).setOnClickListener {{
+            taps++
+            label.text = getString(R.string.tapped, taps)
+        }}
+    }}
+}}
+"""
+    files = {
+        "settings.gradle.kts": settings,
+        "build.gradle.kts": root_build,
+        "gradle/libs.versions.toml": libs,
+        "gradle.properties": "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8\nandroid.useAndroidX=true\n"
+                             "kotlin.code.style=official\nandroid.nonTransitiveRClass=true\n",
+        ".gitignore": "*.iml\n.gradle/\n/local.properties\n/.idea/\n.DS_Store\n/build/\n/captures/\n.externalNativeBuild/\n.cxx/\n",
+        "app/.gitignore": "/build\n",
+        "app/build.gradle.kts": app_build,
+        "app/proguard-rules.pro": "# Add project specific ProGuard rules here.\n",
+        "app/src/main/AndroidManifest.xml": manifest,
+        f"{pkg_dir}/MainActivity.kt": activity,
+        "app/src/main/res/values/strings.xml": f'<resources>\n    <string name="app_name">{name}</string>\n'
+                                                 '    <string name="tapped">Tapped %1$d times</string>\n</resources>\n',
+        "app/src/main/res/values/themes.xml": f'<resources>\n    <style name="Theme.App" parent="{theme}" />\n</resources>\n',
+        "app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml":
+            '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+            '    <background android:drawable="@color/ic_launcher_background" />\n'
+            '    <foreground android:drawable="@drawable/ic_launcher_foreground" />\n</adaptive-icon>\n',
+        "app/src/main/res/values/colors.xml": '<resources>\n    <color name="ic_launcher_background">#0A84FF</color>\n</resources>\n',
+        "app/src/main/res/drawable/ic_launcher_foreground.xml":
+            '<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp"\n'
+            '    android:viewportWidth="108" android:viewportHeight="108">\n'
+            '    <path android:fillColor="#FFFFFF" android:pathData="M40,72V42a4,4 0,0 1,4 -4h22v8H48v8h14v8H48v10z" />\n</vector>\n',
+        "README.md": f"# {name}\n\nCreated with Forge Studio. Build with `./gradlew assembleDebug`, install with `./gradlew installDebug`.\n",
+    }
+    if min_sdk < 26:  # adaptive icons need API 26; give older devices a plain fallback
+        files["app/src/main/res/drawable/ic_launcher_legacy.xml"] = files["app/src/main/res/drawable/ic_launcher_foreground.xml"]
+        files["app/src/main/res/mipmap-anydpi/ic_launcher.xml"] = (
+            '<?xml version="1.0" encoding="utf-8"?>\n<layer-list xmlns:android="http://schemas.android.com/apk/res/android">\n'
+            '    <item android:drawable="@color/ic_launcher_background" />\n'
+            '    <item android:drawable="@drawable/ic_launcher_legacy" />\n</layer-list>\n')
+    if not compose:
+        files["app/src/main/res/layout/activity_main.xml"] = """<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:id="@+id/label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/app_name"
+        android:textAppearance="?attr/textAppearanceHeadlineMedium" />
+
+    <Button
+        android:id="@+id/button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="Tap me" />
+</LinearLayout>
+"""
+    return files
 
 
 # ---------------------------------------------------------------- files, uploads, LAN access
@@ -2087,8 +2563,13 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/proc/log":
                 rec = PROCS.get(qs.get("id", [""])[0])
                 return self._send(200, {"lines": list(rec["log"]) if rec else []})
+            if u.path == "/api/android/sdk":
+                return self._send(200, {"platforms": android_platforms(), "gradle": bool(gradle_launcher()),
+                                        "agp": AGP_VERSION, "gradleVersion": GRADLE_VERSION, "kotlin": KOTLIN_VERSION})
             if u.path == "/api/android/devices":
                 return self._send(200, list_devices())
+            if u.path == "/api/android/stream":
+                return self.screen_stream(qs.get("serial", [None])[0] or None, int(qs.get("fps", ["120"])[0]))
             if u.path == "/api/android/screenshot":
                 r = adb("exec-out", "screencap", "-p", serial=qs.get("serial", [None])[0] or None, timeout=30)
                 if r.returncode != 0 or not r.stdout.startswith(b"\x89PNG"):
@@ -2136,7 +2617,7 @@ class Handler(BaseHTTPRequestHandler):
             "projects": discover(),
             "tools": {"claude": bool(shutil.which("claude", path=env_path)), "adb": adb_path(),
                       "studio": find_studio(), "java": find_java_home(), "emulator": emulator_path(),
-                      "scrcpy": scrcpy_path(), "node": shutil.which("node", path=env_path),
+                      "scrcpy": scrcpy_path(), "stream": bool(scrcpy_server()[1]), "node": shutil.which("node", path=env_path),
                       "sdk": str(find_sdk() or ""), "git": shutil.which("git", path=env_path)},
             "previews": {k: {"url": v["url"], "dir": v["dir"]} for k, v in PREVIEWS.items()},
             "running": [cid for cid, r in RUNS.items() if r.running() and cid in prof.data["chats"]],
@@ -2302,7 +2783,8 @@ class Handler(BaseHTTPRequestHandler):
             ap["run"].answer(b["id"], b["decision"], b.get("answers"), b.get("note"))
             return None
         if path == "/api/prefs":
-            prof.data["settings"].update({k: v for k, v in b.items() if k in ("theme", "accent", "density", "mode", "agent")})
+            prof.data["settings"].update({k: v for k, v in b.items() if k in ("theme", "accent", "density", "mode", "agent", "notify", "sound",
+                                                                                 "nApproval", "nDone", "nBuild", "nCrash")})
             prof.save()
             return prof.data["settings"]
         if path == "/api/agents/save":
@@ -2426,6 +2908,12 @@ class Handler(BaseHTTPRequestHandler):
             subprocess.Popen([studio, project], start_new_session=True, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, env=tool_env())
             return None
+        if path == "/api/android/new":
+            return new_android_app(b.get("parent"), b.get("name"), b.get("package"), b.get("template"), b.get("minSdk"))
+        if path == "/api/android/wrapper":
+            add_wrapper(project, then=lambda code: emit({"type": "projects_changed", "text": "Gradle wrapper added" if code == 0
+                                                           else "Adding the Gradle wrapper failed — see the build log"}))
+            return None
         if path == "/api/android/gradle":
             gradle(project, b["task"], serial)
             return None
@@ -2440,7 +2928,8 @@ class Handler(BaseHTTPRequestHandler):
                             start_logcat(project, serial, app_id, "app")
                         except Exception as e:
                             emit({"type": "toast", "text": str(e), "err": True})
-            gradle(project, f":{module}:installDebug", serial, then=after)
+            variant = "Release" if b.get("variant") == "Release" else "Debug"
+            gradle(project, f":{module}:install{variant}", serial, then=after)
             return None
         if path == "/api/android/stop":
             adb("shell", "am", "force-stop", b["applicationId"], serial=serial)
@@ -2498,6 +2987,31 @@ class Handler(BaseHTTPRequestHandler):
                        str(HOME), "scrcpy", project or "", "scrcpy mirror", env=env)
             return None
         raise ValueError(f"unknown endpoint {path}")
+
+    def screen_stream(self, serial, fps):
+        """Relay scrcpy's raw video stream; the browser parses the packets and decodes H.264 with WebCodecs."""
+        sock, cleanup = open_screen_stream(serial, max_fps=max(10, min(fps, 144)))
+        size = device_size(serial)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            if size:
+                self.send_header("X-Device-Size", "x".join(size))
+            self.end_headers()
+            self.close_connection = True
+            while True:
+                data = sock.recv(256 * 1024)
+                if not data:
+                    break
+                self.wfile.write(data)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            sock.close()
+            cleanup()
 
     def sse(self, pid):
         q = queue.Queue(maxsize=5000)

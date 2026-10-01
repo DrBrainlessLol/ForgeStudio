@@ -37,6 +37,34 @@ function toast(text, err) {
   $("#toasts").append(el);
   setTimeout(() => el.remove(), err ? 8000 : 3500);
 }
+// ---- notifications: a soft chime and (when Forge isn't in front) a system notification, per the user's settings
+const NOTIFY_KINDS = { approval: "nApproval", done: "nDone", build: "nBuild", crash: "nCrash" };
+let audioCtx = null;
+function chime(kind) {
+  try {
+    audioCtx ??= new AudioContext();
+    const t = audioCtx.currentTime, notes = kind === "approval" ? [880, 1175] : kind === "crash" || kind === "fail" ? [523, 392] : [659, 988];
+    notes.forEach((f, i) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0, t + i * 0.13);
+      g.gain.linearRampToValueAtTime(0.16, t + i * 0.13 + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.13 + 0.35);
+      o.connect(g).connect(audioCtx.destination);
+      o.start(t + i * 0.13); o.stop(t + i * 0.13 + 0.4);
+    });
+  } catch {}
+}
+function alertUser(kind, title, body = "", onClick = null, failed = false) {
+  const p = S.prefs || {};
+  if (p[NOTIFY_KINDS[kind]] === false) return;
+  const away = document.hidden || !document.hasFocus();
+  if (p.sound !== false) chime(failed ? "fail" : kind);
+  if (p.notify && away && "Notification" in window && Notification.permission === "granted") {
+    const n = new Notification(title, { body, icon: "icon-192.png", tag: `${kind}:${title}`, renotify: true, requireInteraction: kind === "approval" });
+    n.onclick = () => { window.focus(); n.close(); onClick?.(); };
+  }
+}
 const act = (fn) => async (...a) => { try { await fn(...a); } catch (e) { if (!(e instanceof LoginNeeded)) toast(e.message, true); } };
 const ago = (t) => {
   const s = Date.now() / 1000 - t;
@@ -298,18 +326,25 @@ function renderChat() {
   $("#agentPill").hidden = !ag || ag === "claude";
   $("#agentPill").textContent = S.agents.find((a) => a.id === ag)?.name || "";
   if (!S.cur) {
-    box.innerHTML = `<div class="empty"><img src="icon.svg" alt=""><h2>Welcome to Forge Studio</h2><p>Pick a project in the sidebar, or start one below. The agent works inside the folder; the editor, previews and Android tools are on the right.</p>
+    $("#chatPane").classList.remove("home"); $("#homeChips").hidden = true;
+    box.innerHTML = `<div class="empty"><img src="icon.svg" alt=""><h2>Welcome to Forge Studio</h2><p>Pick a project in the sidebar, or start one below. Switch between <b>Agent</b>, <b>Editor</b> and <b>Android</b> at the top — the agent comes with you.</p>
       <div class="tiles" id="welcomeTiles">
         <div class="tile" data-w="open">${ic("folder")}<span class="label">Open Project</span></div>
         <div class="tile" data-w="clone">${ic("clone")}<span class="label">Clone Repo</span></div>
-        <div class="tile hot" data-w="new">${ic("folder-plus")}<span class="label">New Project</span></div>
+        <div class="tile" data-w="new">${ic("folder-plus")}<span class="label">New Project</span></div>
+        <div class="tile hot" data-w="android">${ic("phone")}<span class="label">New Android App</span></div>
       </div></div>`;
+    box.querySelector('[data-w="android"]').onclick = openNewApp;
     box.querySelector('[data-w="open"]').onclick = () => $("#btnAdd").click();
     box.querySelector('[data-w="clone"]').onclick = () => openProjectDialog("clone");
     box.querySelector('[data-w="new"]').onclick = () => openProjectDialog("new");
     updateBusy(); return;
   }
   const items = cid ? S.items[cid] || [] : [];
+  const home = !items.length && S.mode === "agent";
+  $("#chatPane").classList.toggle("home", home);
+  $("#homeChips").hidden = !home;
+  if (home) { renderHome(box); updateBusy(); return; }
   if (!items.length) box.innerHTML = `<div class="empty"><h2>${esc(project()?.name)}</h2><p>Ask the agent to build, fix or explain something. Attach screenshots, designs or files with the clip.</p><p class="dim">Earlier conversations are in the menu at the top.</p></div>`;
   for (const it of items) box.append(renderItem(it));
   updateBusy();
@@ -329,6 +364,7 @@ function onChat(cid, projectPath, ev) {
   if (visible) {
     const box = $("#messages");
     const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+    if (pushed.length && $("#chatPane").classList.contains("home")) { $("#chatPane").classList.remove("home"); $("#homeChips").hidden = true; box.innerHTML = ""; }
     if (pushed.length) box.querySelector(".empty")?.remove();
     for (const it of pushed) box.insertBefore(renderItem(it), $("#typing"));
     for (const it of changed) pending.add(it);
@@ -340,9 +376,15 @@ function onChat(cid, projectPath, ev) {
     });
     if (stick || ev.type === "approval") box.scrollTop = box.scrollHeight;
   }
-  if (ev.type === "approval" && (!visible || document.hidden)) toast(`${S.meta[cid]?.title || "A chat"} needs your approval`);
+  const openIt = () => act(async () => { if (S.cur !== projectPath) await selectProject(projectPath); await openChat(cid); })();
+  if (ev.type === "approval") {
+    if (!visible || document.hidden) toast(`${S.meta[cid]?.title || "A chat"} needs your approval`);
+    alertUser("approval", "Approval needed", `${S.meta[cid]?.title || "The agent"} wants to ${TOOL_VERBS[ev.tool] || "use " + ev.tool}`, openIt);
+  }
   if (ev.type === "ui_start" || ev.type === "ui_end") { if (visible) updateBusy(); else renderProjects(); }
   if (ev.type === "ui_end" && !visible && S.meta[cid]) toast(`Finished: ${S.meta[cid].title}`);
+  if (ev.type === "ui_end" && S.meta[cid] && (!visible || document.hidden || !document.hasFocus())) alertUser("done", "Agent finished", S.meta[cid].title, openIt);
+  if (ev.type === "ui_end") { S.done = [{ cid }, ...(S.done || []).filter((d) => d.cid !== cid)].slice(0, 8); renderTasks(); }
   // live editor/git refresh when the agent edits files in the open project
   if (projectPath === S.cur && typeof codeAgentTouched === "function") {
     if (ev.type === "tool_results" && ev.results?.length) {
@@ -470,7 +512,14 @@ async function addFiles(list) {
   }
 }
 
+function showAgent() {
+  if (!$("#layout").classList.contains("no-agent")) return;
+  $("#layout").classList.remove("no-agent"); store.set("fs:noagent", false); $("#btnAgent").classList.add("on");
+}
+// anything that puts text in the message box (Ask agent, Ask, Ask to fix…) brings a hidden agent chat back
+{ const box = $("#prompt"), focus = box.focus.bind(box); box.focus = (...a) => { showAgent(); focus(...a); }; }
 async function send(text) {
+  showAgent();
   text = (text ?? $("#prompt").value).trim();
   const files = S.attachments.filter((a) => !a.uploading).map(({ name, path, size, kind, mime }) => ({ name, path, size, kind, mime }));
   if ((!text && !files.length) || !S.cur) return;
@@ -482,7 +531,7 @@ async function send(text) {
   S.loaded[r.chat] = true;
   S.items[r.chat] ??= [];
   if (!cid) { S.curChat[p] = r.chat; if (S.cur === p) renderChat(); }
-  $("#prompt").value = ""; S.attachments = []; renderAttachments();
+  $("#prompt").value = ""; $("#prompt").style.height = ""; S.attachments = []; renderAttachments();
 }
 
 // ============================================================ history
@@ -532,6 +581,7 @@ async function showHistory() {
 
 // ============================================================ projects
 function renderProjects() {
+  renderTasks(); renderStatusBar();
   const f = $("#projFilter").value.toLowerCase();
   const ul = $("#projList");
   ul.innerHTML = "";
@@ -568,13 +618,14 @@ async function selectProject(path) {
   S.cur = path || null;
   store.set(pkey("cur"), S.cur);
   const p = project();
-  $("#crumb").textContent = p ? p.name : "";
+  $("#crumb").textContent = p ? p.name : "Open a project";
   document.title = p ? `${p.name} — Forge Studio` : "Forge Studio";
   $("#historyPanel").hidden = true;
   if (innerWidth < 900) $("#layout").classList.remove("show-sidebar");
   renderProjects(); setupPreview(); setupAndroid(); renderProcs();
   if (typeof codeProjectChanged === "function") codeProjectChanged();
-  if (p && !p.web?.length && p.android && activeTab() === "preview") showTab("android");
+  if (S.mode === "android") loadToolchain();
+  renderStatusBar();
   await openChat(chatId()).catch((e) => { S.curChat[S.cur] = null; renderChat(); toast(e.message, true); });
 }
 async function loadState() {
@@ -672,6 +723,7 @@ function openSettings(sec = "general") {
   $$("#swatches .swatch").forEach((b) => (b.onclick = () => setPref({ accent: b.dataset.accent })));
   applyAppearance(S.prefs);
   $("#setMode").value = S.prefs.mode || "ask";
+  renderNotifySettings();
   $("#setHideTest").checked = !!S.settings?.hideTest;
   fillProfile(); renderAgentList(); renderPluginList(); renderProviders(); renderWeb();
   $("#setStudio").value = S.settings?.studio_path || "";
@@ -690,6 +742,29 @@ $("#btnSettings").onclick = () => openSettings("general");
 $("#btnProfile").onclick = () => openSettings("profile");
 $$("#themeSeg button").forEach((b) => (b.onclick = () => setPref({ theme: b.dataset.theme })));
 $$("#densitySeg button").forEach((b) => (b.onclick = () => setPref({ density: b.dataset.density })));
+function renderNotifySettings() {
+  const p = S.prefs, perm = "Notification" in window ? Notification.permission : "unsupported";
+  $("#setNotify").checked = !!p.notify && perm === "granted";
+  $("#setSound").checked = p.sound !== false;
+  for (const k of Object.values(NOTIFY_KINDS)) $("#" + k).checked = p[k] !== false;
+  $("#notifState").textContent = perm === "unsupported" ? "Not available here (needs the app on this computer or HTTPS)"
+    : perm === "denied" ? "Blocked — allow notifications for this site in the browser's site settings" : "Shown when Forge Studio isn't the active window";
+}
+$("#setNotify").onchange = act(async () => {
+  if ($("#setNotify").checked) {
+    if (!("Notification" in window)) { $("#setNotify").checked = false; throw new Error("Notifications aren't available here"); }
+    const perm = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+    if (perm !== "granted") { $("#setNotify").checked = false; renderNotifySettings(); throw new Error("Notifications are blocked — allow them in the browser's site settings (the icon left of the address)"); }
+  }
+  await setPref({ notify: $("#setNotify").checked }); renderNotifySettings();
+});
+$("#setSound").onchange = () => { setPref({ sound: $("#setSound").checked }); if ($("#setSound").checked) chime("done"); };
+for (const k of Object.values(NOTIFY_KINDS)) $("#" + k).onchange = () => setPref({ [k]: $("#" + k).checked });
+$("#btnTestNotify").onclick = () => {
+  chime("approval");
+  if (S.prefs.notify && Notification.permission === "granted") new Notification("Forge Studio", { body: "Notifications are working.", icon: "icon-192.png" });
+  else toast("Sound played. Turn on desktop notifications above to get system notifications too.");
+};
 $("#setMode").onchange = () => { setPref({ mode: $("#setMode").value }); $("#mode").value = $("#setMode").value; };
 $("#setHideTest").onchange = act(async () => { await api("/api/settings", { hideTest: $("#setHideTest").checked }); S.settings.hideTest = $("#setHideTest").checked; toast($("#setHideTest").checked ? "Test profiles will be hidden on the sign-in screen" : "Test profiles will be shown"); });
 
@@ -727,7 +802,7 @@ function renderAgentList() {
   for (const a of S.agents) {
     const li = document.createElement("li");
     const badge = a.id === "claude" ? '<span class="badge star">Recommended</span>' : a.kind === "codex" ? '<span class="badge">Native</span>' : "";
-    li.innerHTML = `${ic(a.kind === "claude" ? "sparkles" : "terminal")}<span class="grow"><b>${esc(a.name)}</b> ${badge}<small class="mono">${esc(a.template || a.bin)}</small></span>
+    li.innerHTML = `${ic(a.kind === "claude" ? "bot" : "terminal")}<span class="grow"><b>${esc(a.name)}</b> ${badge}<small class="mono">${esc(a.template || a.bin)}</small></span>
       <span class="badge ${a.installed ? "ok" : ""}">${a.installed ? "Installed" : "Not installed"}</span>${a.custom ? `<button class="icon-btn" title="Remove">${ic("trash")}</button>` : ""}`;
     li.querySelector("button")?.addEventListener("click", act(async () => { await api("/api/agents/delete", { id: a.id }); await loadState(); renderAgentList(); }));
     ul.append(li);
@@ -782,7 +857,7 @@ const PRESETS = [
 ];
 function renderProviders() {
   const ul = $("#provList");
-  ul.innerHTML = `<li>${ic("sparkles")}<span class="grow"><b>This computer's Claude login</b><small>Always available</small></span></li>`;
+  ul.innerHTML = `<li>${ic("bot")}<span class="grow"><b>This computer's Claude login</b><small>Always available</small></span></li>`;
   for (const p of S.providers) {
     const li = document.createElement("li");
     li.innerHTML = `${ic("key")}<span class="grow"><b>${esc(p.name)}</b><small>${p.type === "anthropic" ? "Anthropic API key" : esc(p.baseUrl)} · key ${p.apiKey ? esc(p.apiKey) : "not set"}${p.models?.length ? " · " + esc(p.models.join(", ")) : ""}</small></span>
@@ -897,11 +972,15 @@ function setupAndroid() {
   const mods = $("#moduleSel");
   mods.innerHTML = "";
   (a?.modules || []).forEach((m) => mods.append(new Option(`${m.name}${m.applicationId ? "  ·  " + m.applicationId : ""}`, m.name)));
-  $("#moduleRow").hidden = !a?.modules?.length;
-  $("#androidInfo").innerHTML = !p ? "Select a project." : a
-    ? `Gradle project${a.gradlew ? "" : " — <b>no gradlew wrapper</b>, open it in Android Studio once"}.`
-    : "This folder isn't an Android Gradle project. You can still open it in Android Studio, or add your app folder with the + button.";
-  for (const id of ["#btnRun", "#btnBuild", "#btnStopApp", "#btnRestart", "#btnTask"]) $(id).disabled = !a;
+  const mod = a?.modules?.[0];
+  $("#androidInfo").textContent = !a ? "" : [mod?.applicationId, mod?.minSdk && `minSdk ${mod.minSdk}`,
+    mod?.compileSdk && `compileSdk ${mod.compileSdk}`, a.gradle && `Gradle ${a.gradle}`, mod && (mod.compose ? "Compose" : "Views")].filter(Boolean).join(" · ");
+  $("#droidEmpty").hidden = !!a;
+  $("#droidEmptyText").textContent = !p ? "Pick a project, or create a new Android app." : `${p.name} isn't an Android Gradle project (no settings.gradle).`;
+  $("#droidPane").classList.toggle("no-app", !a);
+  $("#wrapperHint").hidden = !a || a.gradlew;
+  for (const id of ["#btnRun", "#btnBuild", "#btnStopApp", "#btnRestart", "#btnTask"]) $(id).disabled = !a || !a.gradlew;
+  renderTaskChips();
   $("#btnStudio").disabled = !p;
   $("#andLog").textContent = ""; $("#btnFix").hidden = true; $("#btnConsoleStop").hidden = true;
   S.consoleProc = null;
@@ -912,6 +991,38 @@ function setupAndroid() {
   const l = p && S.procs.filter((x) => x.kind === "logcat" && x.project === p.path).pop();
   if (l) { attachLogcat(l.id, l.running); api("/api/proc/log?id=" + l.id).then((d) => { d.lines.forEach((x) => lcAdd(x, true)); lcRender(); }).catch(() => {}); }
   else { lcSetRunning(false); lcRender(); }
+}
+function setDroidView(v) {
+  $$("#droidTabs button").forEach((b) => b.classList.toggle("active", b.dataset.dv === v));
+  $$("#droidPane .droid-view").forEach((el) => (el.hidden = el.dataset.dv !== v));
+  if (v === "build") $("#buildDot").hidden = true;
+  store.set("fs:droidView", v);
+}
+const variant = () => $("#variantSel").value || "Debug";
+const GRADLE_CHIPS = ["clean", "assemble{V}", "bundle{V}", "test{V}UnitTest", "lint{V}", "connected{V}AndroidTest", "dependencies", "signingReport", "tasks"];
+function renderTaskChips() {
+  const m = $("#moduleSel").value || "app";
+  $("#taskChips").innerHTML = GRADLE_CHIPS.map((t) => {
+    const task = t.replace("{V}", variant());
+    const full = ["clean", "tasks", "signingReport"].includes(task) ? task : `:${m}:${task}`;
+    return `<button class="chip mono" data-task="${esc(full)}">${esc(full)}</button>`;
+  }).join("");
+  $$("#taskChips .chip").forEach((c) => (c.onclick = act(() => { $("#gradleTask").value = c.dataset.task; return gradleTask(c.dataset.task); })));
+}
+async function loadToolchain() {
+  try {
+    S.sdk ??= await api("/api/android/sdk");
+    const a = project()?.android, t = S.tools;
+    const row = (k, v) => `<div><span class="dim">${k}</span><span class="mono">${esc(v || "—")}</span></div>`;
+    $("#toolchain").innerHTML = row("Project Gradle", a ? (a.gradlew ? a.gradle : "no wrapper") : "") + row("Android SDK", t.sdk) +
+      row("SDK platforms", S.sdk.platforms.map((x) => "API " + x).join(", ")) + row("JDK", t.java) +
+      row("New apps use", `AGP ${S.sdk.agp} · Gradle ${S.sdk.gradleVersion} · Kotlin ${S.sdk.kotlin}`) + row("adb", t.adb);
+  } catch {}
+}
+function openNewApp() {
+  $("#naName").value = ""; $("#naPkg").value = ""; delete $("#naPkg").dataset.edited;
+  $("#naParent").value = "~/AndroidStudioProjects";
+  $("#dlgNewApp").showModal(); $("#naName").focus();
 }
 const appId = () => project()?.android?.modules?.find((m) => m.name === $("#moduleSel").value)?.applicationId;
 const serial = () => $("#deviceSel").value || null;
@@ -933,10 +1044,11 @@ async function refreshDevices() {
   d.avds.forEach((n) => avd.append(new Option(n, n)));
   $("#avdRow").hidden = !d.avds.length;
   $("#btnScrcpy").hidden = !S.tools.scrcpy;
+  renderStatusBar();
   if (d.error) toast(d.error, true);
 }
 async function gradleTask(task) {
-  $("#andLog").textContent = ""; $("#btnFix").hidden = true;
+  $("#andLog").textContent = ""; $("#btnFix").hidden = true; setDroidView("build");
   await api("/api/android/gradle", { project: S.cur, task, serial: serial() });
 }
 
@@ -979,6 +1091,7 @@ function lcAdd(raw, bulk) {
   }
   if (LC.crash && LC.crash.lines.length < 80 && Date.now() - LC.crash.t < 3000 && (l.lvl === "E" || l.lvl === "F")) {
     LC.crash.lines.push(l.raw);
+    if (!bulk && LC.crash.lines.length === 1) alertUser("crash", /ANR/.test(l.msg) ? "App not responding" : "App crashed", appId() || project()?.name || "", () => { setMode("android"); setDroidView("run"); });
     if (!bulk) { $("#crashText").textContent = /ANR/.test(LC.crash.lines.join("\n")) ? "The app stopped responding (ANR)." : "The app crashed."; $("#crashBar").hidden = false; }
   }
   if (bulk || !lcVisible(l)) return;
@@ -992,9 +1105,25 @@ function lcSetRunning(on) { $("#btnLogcat").innerHTML = on ? ic("stop") + " <spa
 function attachLogcat(id, isRunning) { LC.proc = id; LC.lines = []; lcSetRunning(isRunning); lcRender(); }
 const logcatText = (lines) => lines.map((l) => l.raw).join("\n");
 
-// device screen mirror
-const M = { on: false, t: 0, frames: 0 };
+// device screen mirror: a live H.264 stream (scrcpy's on-device encoder, decoded here with WebCodecs) at up to
+// 120 fps; plain screenshots are the fallback when scrcpy or WebCodecs isn't available
+const M = { on: false, t: 0, frames: 0, abort: null, dec: null, live: false, dev: null };
+const canStream = () => S.tools.stream && "VideoDecoder" in window;
+function mirrorTick(kind) {
+  M.frames++;
+  const dt = performance.now() - M.t;
+  if (dt > 1000) { $("#mirrorStat").textContent = `${Math.round(M.frames / (dt / 1000))} fps · ${kind}`; M.t = performance.now(); M.frames = 0; }
+}
 async function mirrorLoop() {
+  if (canStream()) {
+    try { return await streamLoop(); }
+    catch (e) { if (!M.on || e.name === "AbortError") return; toast(`Live stream unavailable (${e.message}) — falling back to screenshots`, true); }
+  }
+  shotLoop();
+}
+async function shotLoop() {
+  M.live = false; $("#mirrorImg").hidden = false; $("#mirrorCanvas").hidden = true;
+  $("#mirrorNote").textContent = "Screenshot view (refreshes every 1–3 s). Install scrcpy for a smooth live stream.";
   while (M.on) {
     const t0 = performance.now();
     try {
@@ -1002,22 +1131,92 @@ async function mirrorLoop() {
       const img = $("#mirrorImg"), old = img.src;
       img.src = URL.createObjectURL(blob);
       if (old) URL.revokeObjectURL(old);
-      M.frames++;
-      if (performance.now() - M.t > 2000) { $("#mirrorStat").textContent = `${(M.frames / ((performance.now() - M.t) / 1000)).toFixed(1)} fps`; M.t = performance.now(); M.frames = 0; }
+      mirrorTick("screenshots");
     } catch (e) { if (!(e instanceof LoginNeeded)) toast(e.message, true); stopMirror(); break; }
     await new Promise((r) => setTimeout(r, Math.max(0, 150 - (performance.now() - t0))));
   }
 }
+// "avc1.PPCCLL" from the SPS in scrcpy's config packet
+function avcCodec(data) {
+  for (let i = 0; i + 7 < data.length; i++) {
+    if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 1 && (data[i + 3] & 0x1f) === 7) {
+      return "avc1." + [data[i + 4], data[i + 5], data[i + 6]].map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+  }
+  return null;
+}
+async function streamLoop() {
+  M.abort = new AbortController();
+  const r = await fetch(`/api/android/stream?serial=${encodeURIComponent(serial() || "")}&fps=120`,
+    { headers: { "X-Token": TOKEN, "X-Login": LOGIN }, signal: M.abort.signal });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+  M.dev = (r.headers.get("X-Device-Size") || "").split("x").map(Number).filter(Boolean);
+  const canvas = $("#mirrorCanvas"), ctx = canvas.getContext("2d");
+  let pending = null, raf = 0;
+  const draw = () => {
+    raf = 0;
+    const f = pending; pending = null;
+    if (!f) return;
+    if (canvas.width !== f.displayWidth || canvas.height !== f.displayHeight) { canvas.width = f.displayWidth; canvas.height = f.displayHeight; }
+    ctx.drawImage(f, 0, 0);
+    f.close();
+  };
+  M.dec = new VideoDecoder({
+    output: (f) => { pending?.close(); pending = f; mirrorTick("live H.264"); if (!raf) raf = requestAnimationFrame(draw); },
+    error: (e) => { if (M.on) toast("Video decoder: " + e.message, true); },
+  });
+  M.live = true; canvas.hidden = false; $("#mirrorImg").hidden = true;
+  $("#mirrorNote").textContent = "Live stream from the phone's video encoder, up to 120 fps.";
+  // scrcpy stream: 4-byte codec id, then 12-byte headers. Top bit = session packet (new video size);
+  // otherwise bit 62 = codec config (SPS/PPS), bit 61 = keyframe, low bits = pts (µs), then a 4-byte payload size.
+  const reader = r.body.getReader();
+  let buf = new Uint8Array(0);
+  const need = async (n) => {
+    while (buf.length < n) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error("the stream ended");
+      const nb = new Uint8Array(buf.length + value.length); nb.set(buf); nb.set(value, buf.length); buf = nb;
+    }
+  };
+  const take = (n) => { const out = buf.subarray(0, n); buf = buf.subarray(n); return out; };
+  await need(4); take(4);
+  let config = null;
+  while (M.on) {
+    await need(12);
+    const h = take(12), dv = new DataView(h.buffer, h.byteOffset, 12);
+    if (h[0] & 0x80) continue;
+    const hi = dv.getUint32(0), size = dv.getUint32(8);
+    await need(size);
+    const data = take(size);
+    if (hi & 0x40000000) {
+      config = data.slice();
+      const codec = avcCodec(config);
+      if (codec) M.dec.configure({ codec, optimizeForLatency: true });
+      continue;
+    }
+    if (M.dec.state !== "configured") continue;
+    const key = !!(hi & 0x20000000);
+    let chunk = data;
+    if (key && config) { chunk = new Uint8Array(config.length + data.length); chunk.set(config); chunk.set(data, config.length); }
+    M.dec.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: (hi & 0x1fffffff) * 4294967296 + dv.getUint32(4), data: chunk }));
+  }
+}
 function stopMirror() {
   M.on = false;
+  M.abort?.abort(); M.abort = null;
+  if (M.dec && M.dec.state !== "closed") M.dec.close();
+  M.dec = null;
   $("#btnMirror").innerHTML = ic("cast") + " Show screen";
   $("#mirrorWrap").hidden = $("#typeRow").hidden = true;
   $("#mirrorStat").textContent = "";
 }
 const input = (body) => api("/api/android/input", { serial: serial(), ...body }).catch((e) => toast(e.message, true));
 function devicePoint(e) {
-  const img = $("#mirrorImg"), r = img.getBoundingClientRect();
-  return { x: ((e.clientX - r.left) / r.width) * img.naturalWidth, y: ((e.clientY - r.top) / r.height) * img.naturalHeight };
+  const el = M.live ? $("#mirrorCanvas") : $("#mirrorImg"), r = el.getBoundingClientRect();
+  let w = M.live ? el.width : el.naturalWidth, h = M.live ? el.height : el.naturalHeight;
+  // the stream is scaled down; taps go to adb in real screen pixels (swap for landscape)
+  if (M.live && M.dev?.length === 2) [w, h] = (w > h) === (M.dev[0] > M.dev[1]) ? M.dev : [M.dev[1], M.dev[0]];
+  return { x: ((e.clientX - r.left) / r.width) * w, y: ((e.clientY - r.top) / r.height) * h };
 }
 
 // ============================================================ processes
@@ -1053,7 +1252,9 @@ function connect() {
         }
         if (ev.project === S.cur && ev.kind === "logcat") { attachLogcat(ev.proc, true); $("#crashBar").hidden = true; LC.crash = null; }
         if (ev.project === S.cur && ev.kind === "preview") $("#prevLog").textContent = "";
-        renderProcs(); break;
+        if (ev.project === S.cur && ev.kind === "gradle" && $('[data-dv="build"]').hidden) $("#buildDot").hidden = false;
+        if (ev.project === S.cur && ev.kind === "logcat" && S.mode === "android") setDroidView("run");
+        renderProcs(); renderStatusBar(); break;
       case "log":
         if (ev.kind !== "logcat") {
           (S.procLogs[ev.proc] ??= []).push(ev.line);
@@ -1077,6 +1278,9 @@ function connect() {
           if (ev.project === S.cur) { $("#btnPrevStart").hidden = false; $("#btnPrevStop").hidden = true; $("#prevLogBox").open = true; }
           renderProjects();
         }
+        renderStatusBar();
+        if (ev.kind === "gradle") alertUser("build", `${ev.label} ${ev.code === 0 ? "finished" : "failed"}`, ev.project.split("/").pop(),
+          () => act(async () => { if (S.cur !== ev.project) await selectProject(ev.project); setMode("android"); setDroidView("build"); })(), ev.code !== 0);
         if (ev.kind === "gradle" && ev.project !== S.cur) toast(`${ev.label} ${ev.code === 0 ? "finished" : "failed"} in ${ev.project.split("/").pop()}`, ev.code !== 0);
         renderProcs(); break;
       }
@@ -1093,70 +1297,183 @@ function connect() {
       case "toast": toast(ev.text, ev.err); break;
       case "projects_changed":
         if (ev.text) toast(ev.text);
-        act(async () => { await loadState(); if (ev.select) await selectProject(ev.select); })();
+        act(async () => {
+          await loadState();
+          if (ev.select) {
+            const newApp = S.pendingSelect === ev.select;
+            await selectProject(ev.select);
+            if (newApp) { S.pendingSelect = null; setMode("android"); }
+          } else setupAndroid();
+        })();
         break;
     }
   };
 }
 
-// ============================================================ tabs & layout
-const activeTab = () => document.querySelector(".tabs .active").dataset.tab;
+// ============================================================ modes & layout
+// Three workspaces share one agent chat:
+//   Agent   — projects + tasks | chat | Preview / Processes
+//   Editor  — explorer / search / git + code editor | agent docked on the right
+//   Android — run bar, logcat, Gradle, devices       | agent docked on the right
+const MODES = ["agent", "editor", "android"];
+const activeTab = () => document.querySelector(".tabs .active")?.dataset.tab || "preview";
 function showTab(name) {
+  if (!["preview", "procs"].includes(name)) name = "preview";
   $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
-  $$(".tab").forEach((t) => (t.hidden = t.id !== "tab-" + name));
+  $$(".panel .tab").forEach((t) => (t.hidden = t.id !== "tab-" + name));
   store.set("fs:tab", name);
-  $("#layout").classList.toggle("code-left", name === "code");
-  if (name === "android") act(refreshDevices)();
   if (name === "procs") renderProcs();
 }
-// the code editor is its own pane on the left of the chat, independent of the Preview / Android / Processes tabs
-function showCode(on = $("#tab-code").hidden) {
-  $("#tab-code").hidden = $("#codeSplit").hidden = !on;
-  $("#btnCode").classList.toggle("on", on);
-  store.set("fs:code", on);
-  if (on && typeof codeTabShown === "function") codeTabShown();
-}
-$("#btnCode").onclick = () => showCode();
 $$(".tabs button").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+
+function setMode(mode, save = true) {
+  if (!MODES.includes(mode)) mode = "agent";
+  const prev = S.mode;
+  S.mode = mode;
+  document.body.dataset.mode = mode;
+  $$("#modes button").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  $("#tab-code").hidden = mode !== "editor";
+  $("#droidPane").hidden = mode !== "android";
+  $("#layout").classList.toggle("no-sidebar", !sideOpen());
+  applyWidths();
+  if (save) store.set("fs:mode", mode);
+  if (mode === "editor" && typeof codeTabShown === "function") codeTabShown();
+  if (mode === "android" && prev !== "android") { act(refreshDevices)(); loadToolchain(); }
+  if (prev === "android" && mode !== "android" && M.on) stopMirror();  // don't keep streaming video in the background
+  if (prev !== mode) renderChat();
+  renderStatusBar();
+}
+// compatibility for callers that used to toggle the old Code pane
+const showCode = (on = true) => setMode(on ? "editor" : "agent");
+$$("#modes button").forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && ["1", "2", "3"].includes(e.key)) { e.preventDefault(); setMode(MODES[+e.key - 1]); }
+});
+
+// the projects sidebar is open by default in Agent mode and tucked away in the IDE modes
+const sideOpen = () => store.get("fs:side:" + (S.mode || "agent"), S.mode === "agent" || !S.mode);
 $("#btnSidebar").onclick = () => {
   const l = $("#layout");
-  if (innerWidth < 900) l.classList.toggle("show-sidebar");
-  else { l.classList.toggle("no-sidebar"); store.set("fs:nosidebar", l.classList.contains("no-sidebar")); }
+  if (innerWidth < 900) return l.classList.toggle("show-sidebar");
+  store.set("fs:side:" + S.mode, !sideOpen());
+  l.classList.toggle("no-sidebar", !sideOpen());
 };
-if (store.get("fs:nosidebar", false)) $("#layout").classList.add("no-sidebar");
-$("#btnTogglePanel").onclick = () => { $("#layout").classList.toggle("no-panel"); store.set("fs:nopanel", $("#layout").classList.contains("no-panel")); };
+// Agent mode: the chat-header button hides the Preview panel. Editor / Android: it (and the title-bar button) hides the docked agent chat.
+function toggleRight() {
+  const l = $("#layout"), cls = S.mode === "agent" ? "no-panel" : "no-agent";
+  l.classList.toggle(cls);
+  store.set(cls === "no-panel" ? "fs:nopanel" : "fs:noagent", l.classList.contains(cls));
+  $("#btnAgent").classList.toggle("on", !l.classList.contains("no-agent"));
+}
+$("#btnTogglePanel").onclick = toggleRight;
+$("#btnAgent").onclick = toggleRight;
 if (store.get("fs:nopanel", false)) $("#layout").classList.add("no-panel");
+if (store.get("fs:noagent", false)) $("#layout").classList.add("no-agent");
+$("#btnAgent").classList.toggle("on", !$("#layout").classList.contains("no-agent"));
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "j" && S.mode !== "agent") { e.preventDefault(); toggleRight(); }
+});
+
+// one divider: in Agent mode it sizes the Preview panel, in the IDE modes the docked agent chat (both sit right of it)
+function applyWidths() {
+  const docked = S.mode !== "agent";
+  $("#chatPane").style.width = docked ? store.get("fs:dockw", 400) + "px" : "";
+  $("#panel").style.width = docked ? "" : (store.get("fs:panelw", null) ? store.get("fs:panelw") + "px" : "");
+}
 (() => {
-  const r = $("#resizer"), chat = $("#chatPane");
-  const w = store.get("fs:chatw", null); if (w) chat.style.width = w + "px";
+  const r = $("#resizer");
   r.onpointerdown = (e) => {
     r.setPointerCapture(e.pointerId); r.classList.add("drag");
     $$("iframe").forEach((f) => (f.style.pointerEvents = "none"));
-    const box = chat.getBoundingClientRect(), right = $("#layout").classList.contains("code-left");
-    // chat on the left grows as the divider moves right; docked on the right (Code tab) it grows as it moves left
-    r.onpointermove = (m) => { chat.style.width = Math.max(340, right ? box.right - m.clientX : m.clientX - box.left) + "px"; };
+    const docked = S.mode !== "agent", el = docked ? $("#chatPane") : $("#panel");
+    const right = el.getBoundingClientRect().right, min = docked ? 320 : 340;
+    const max = right - $(".work").getBoundingClientRect().left - 360;
+    r.onpointermove = (m) => { el.style.width = Math.min(max, Math.max(min, right - m.clientX)) + "px"; };
     r.onpointerup = () => {
       r.onpointermove = null; r.classList.remove("drag");
       $$("iframe").forEach((f) => (f.style.pointerEvents = ""));
-      store.set("fs:chatw", parseInt(chat.style.width));
+      store.set(docked ? "fs:dockw" : "fs:panelw", parseInt(el.style.width));
     };
   };
 })();
-(() => {
-  const r = $("#codeSplit"), pane = $("#tab-code");
-  const w = store.get("fs:codew", null); if (w) pane.style.width = w + "px";
-  r.onpointerdown = (e) => {
-    r.setPointerCapture(e.pointerId); r.classList.add("drag");
-    $$("iframe").forEach((f) => (f.style.pointerEvents = "none"));
-    const left = pane.getBoundingClientRect().left;
-    r.onpointermove = (m) => { pane.style.width = Math.max(360, m.clientX - left) + "px"; };
-    r.onpointerup = () => {
-      r.onpointermove = null; r.classList.remove("drag");
-      $$("iframe").forEach((f) => (f.style.pointerEvents = ""));
-      store.set("fs:codew", parseInt(pane.style.width));
-    };
+
+// ---- project switcher (title bar)
+$("#btnProj").onclick = (e) => {
+  e.stopPropagation();
+  const r = $("#btnProj").getBoundingClientRect();
+  const items = S.projects.slice(0, 14).map((p) => ({
+    label: p.name + (p.path === S.cur ? "  ✓" : ""), icon: p.android ? "phone" : p.web?.length ? "globe" : "folder",
+    fn: act(() => selectProject(p.path)),
+  }));
+  showMenu(r.left, r.bottom + 4, [...items, ...(items.length ? ["sep"] : []),
+    { label: "Open folder…", icon: "folder", fn: () => $("#btnAdd").click() },
+    { label: "Clone repository…", icon: "clone", fn: () => openProjectDialog("clone") },
+    { label: "New project…", icon: "folder-plus", fn: () => openProjectDialog("new") },
+    { label: "New Android app…", icon: "phone", fn: openNewApp }]);
+};
+
+// ---- tasks: agent runs in progress across projects, and the ones that finished this session
+function renderTasks() {
+  const ul = $("#taskList");
+  if (!ul) return;
+  const running = Object.keys(S.running).filter((cid) => S.meta[cid]);
+  const done = (S.done || []).filter((d) => !S.running[d.cid] && S.meta[d.cid]).slice(0, 5);
+  ul.innerHTML = !running.length && !done.length ? '<li class="dim empty-task">Agent tasks you start show up here.</li>' : "";
+  const row = (cid, state) => {
+    const m = S.meta[cid], li = document.createElement("li");
+    li.className = "task " + state;
+    li.innerHTML = `<span class="task-ic"></span><span class="task-main"><span class="task-title">${esc(m.title)}</span>
+      <span class="task-sub">${state === "run" ? "Working" : "Ready"} · ${esc((m.project || "").split("/").pop())}</span></span>`;
+    li.onclick = act(async () => { if (S.cur !== m.project) await selectProject(m.project); await openChat(cid); });
+    ul.append(li);
   };
-})();
+  running.forEach((cid) => row(cid, "run"));
+  done.forEach((d) => row(d.cid, "ok"));
+}
+$("#btnSideNew").onclick = act(async () => { if (!S.cur) return $("#btnAdd").click(); await openChat(null); $("#prompt").focus(); });
+
+// ---- agent home (empty chat in Agent mode): greeting, centred composer and suggestions
+function homeChips() {
+  const p = project();
+  if (p?.android) return ["Add a settings screen to my app", "Find what's slowing down app startup", "Write unit tests for the main screen", "Explain how this app is structured"];
+  if (p?.web?.length) return ["Add a dark mode toggle", "Make the layout responsive on phones", "Find and fix accessibility issues", "Explain how this site is structured"];
+  return ["Explain how this project is structured", "Find and fix bugs", "Write tests for the main module", "Review my uncommitted changes"];
+}
+function renderHome(box) {
+  const first = (S.profile?.name || "").split(" ")[0];
+  box.innerHTML = `<div class="home-hero"><img src="icon.svg" alt=""><h1>Hello${first ? " " + esc(first) : ""}, welcome back!</h1>
+    <h2>What should we build in <b>${esc(project()?.name)}</b>?</h2></div>`;
+  const chips = $("#homeChips");
+  chips.innerHTML = homeChips().map((t) => `<button class="chip">${ic("bot")}<span>${esc(t)}</span></button>`).join("");
+  chips.querySelectorAll(".chip").forEach((c) => (c.onclick = () => { $("#prompt").value = c.textContent.trim(); $("#prompt").focus(); }));
+}
+
+// ---- status bar
+function renderStatusBar() {
+  const bar = $("#statusbar");
+  if (!bar) return;
+  const g = typeof C !== "undefined" && S.cur ? C.git : null, p = project();
+  const busy = S.cur && Object.entries(S.running).some(([, proj]) => proj === S.cur);
+  const left = [];
+  if (g?.repo) left.push(`<button class="sb" data-sb="git">${ic("branch")}${esc(g.branch || "HEAD")}${g.files?.length ? "*" : ""}${g.ahead || g.behind ? ` <span class="dim">${g.behind ? "↓" + g.behind : ""}${g.ahead ? "↑" + g.ahead : ""}</span>` : ""}</button>`);
+  if (p) left.push(`<button class="sb" data-sb="proj">${ic("folder")}${esc(p.name)}</button>`);
+  left.push(`<span class="sb ${busy ? "busy" : ""}">${ic("bot")}${busy ? "Agent working…" : "Agent ready"}</span>`);
+  const right = [];
+  if (S.mode === "android") {
+    const dev = $("#deviceSel")?.value && $("#deviceSel").selectedOptions[0]?.textContent.split("  (")[0];
+    const g2 = p && S.procs.find((x) => x.kind === "gradle" && x.project === p.path && x.running);
+    if (g2) right.push(`<span class="sb busy">${ic("package")}${esc(g2.label)}</span>`);
+    if (p?.android?.gradle) right.push(`<span class="sb">Gradle ${esc(p.android.gradle)}</span>`);
+    right.push(`<span class="sb">${ic("phone")}${esc(dev || "No device")}</span>`);
+  }
+  const live = p && S.previews[p.path];
+  if (live) right.push(`<button class="sb ok" data-sb="preview">${ic("globe")}Preview live</button>`);
+  right.push(`<span class="sb">${{ agent: "Agent", editor: "Editor", android: "Android" }[S.mode || "agent"]} mode</span>`);
+  bar.innerHTML = `${left.join("")}<div class="spacer"></div>${right.join("")}`;
+  bar.querySelector('[data-sb="git"]')?.addEventListener("click", () => { setMode("editor"); setView("git"); });
+  bar.querySelector('[data-sb="proj"]')?.addEventListener("click", (e) => $("#btnProj").onclick(e));
+  bar.querySelector('[data-sb="preview"]')?.addEventListener("click", () => { setMode("agent"); showTab("preview"); });
+}
 
 // ============================================================ wiring: chat
 $("#composer").onsubmit = (e) => { e.preventDefault(); act(send)(); };
@@ -1215,7 +1532,7 @@ $("#autoReload").checked = store.get("fs:live", true);
 $("#autoReload").onchange = () => store.set("fs:live", $("#autoReload").checked);
 
 // android
-$("#deviceSel").onchange = () => store.set("fs:serial", $("#deviceSel").value);
+$("#deviceSel").onchange = () => { store.set("fs:serial", $("#deviceSel").value); renderStatusBar(); };
 $("#btnDevRefresh").onclick = act(refreshDevices);
 $("#btnAvd").onclick = act(async () => { await api("/api/android/emulator", { avd: $("#avdSel").value, project: S.cur }); toast("Emulator starting — press refresh in a moment"); setTimeout(act(refreshDevices), 15000); });
 $("#btnWifi").onclick = act(async () => {
@@ -1227,12 +1544,36 @@ $("#btnStudio").onclick = act(async () => { await api("/api/android/studio", { p
 const needDevice = () => { if (!serial()) throw new Error("Connect your phone (USB or Wi-Fi) or launch an emulator first"); };
 $("#btnRun").onclick = act(async () => {
   needDevice();
-  $("#andLog").textContent = ""; $("#btnFix").hidden = true;
-  await api("/api/android/run", { project: S.cur, serial: serial(), module: $("#moduleSel").value, applicationId: appId(), logcat: true });
+  $("#andLog").textContent = ""; $("#btnFix").hidden = true; setDroidView("build");
+  await api("/api/android/run", { project: S.cur, serial: serial(), module: $("#moduleSel").value, applicationId: appId(), logcat: true, variant: variant() });
   toast("Building and installing… logcat starts when the app launches");
 });
 $("#btnRestart").onclick = act(async () => { needDevice(); if (!appId()) throw new Error("No applicationId found"); await api("/api/android/restart", { project: S.cur, serial: serial(), applicationId: appId() }); });
-$("#btnBuild").onclick = act(() => gradleTask(`:${$("#moduleSel").value || "app"}:assembleDebug`));
+$("#btnBuild").onclick = act(() => gradleTask(`:${$("#moduleSel").value || "app"}:assemble${variant()}`));
+$$("#droidTabs button").forEach((b) => (b.onclick = () => setDroidView(b.dataset.dv)));
+$("#variantSel").onchange = () => { store.set("fs:variant", variant()); renderTaskChips(); };
+$("#variantSel").value = store.get("fs:variant", "Debug");
+$("#moduleSel").onchange = renderTaskChips;
+$("#btnNewApp").onclick = openNewApp;
+$("#tileNewApp").onclick = openNewApp;
+$("#tileOpenApp").onclick = () => $("#btnAdd").click();
+$("#btnWrapper").onclick = act(async () => { setDroidView("build"); await api("/api/android/wrapper", { project: S.cur }); toast("Generating the Gradle wrapper…"); });
+$$("#naTemplates .tpl").forEach((b) => (b.onclick = () => $$("#naTemplates .tpl").forEach((x) => x.classList.toggle("active", x === b))));
+$("#naName").oninput = () => {
+  if (!$("#naPkg").dataset.edited) $("#naPkg").value = "com.example." + ($("#naName").value.toLowerCase().replace(/[^a-z0-9]/g, "") || "myapp").replace(/^\d+/, "");
+};
+$("#naPkg").oninput = () => ($("#naPkg").dataset.edited = "1");
+$("#newAppForm").onsubmit = (e) => {
+  if (e.submitter?.value !== "ok") return;
+  e.preventDefault();
+  act(async () => {
+    const r = await api("/api/android/new", { name: $("#naName").value, package: $("#naPkg").value, parent: $("#naParent").value.trim(),
+      minSdk: +$("#naMin").value, template: $(".tpl.active").dataset.tpl });
+    $("#dlgNewApp").close();
+    S.pendingSelect = r.path;
+    toast(`Creating ${$("#naName").value} (compileSdk ${r.compileSdk}) — setting up the Gradle wrapper…`);
+  })();
+};
 $("#btnTask").onclick = act(() => $("#gradleTask").value.trim() && gradleTask($("#gradleTask").value.trim()));
 $("#gradleTask").onkeydown = (e) => { if (e.key === "Enter") $("#btnTask").click(); };
 $("#btnStopApp").onclick = act(async () => { if (!appId()) throw new Error("No applicationId found"); await api("/api/android/stop", { project: S.cur, serial: serial(), applicationId: appId() }); toast("App stopped"); });
@@ -1284,7 +1625,7 @@ $("#btnMirror").onclick = () => {
   $("#mirrorWrap").hidden = $("#typeRow").hidden = false;
   mirrorLoop();
 };
-$("#mirrorImg").onpointerdown = (e) => {
+$("#mirrorImg").onpointerdown = $("#mirrorCanvas").onpointerdown = (e) => {
   e.preventDefault();
   const img = e.currentTarget; img.setPointerCapture(e.pointerId);
   const start = devicePoint(e), t0 = performance.now();
@@ -1349,8 +1690,9 @@ $("#dlgAdd").onclose = act(async () => {
   connect();
   applyDevice();
   const tab = store.get("fs:tab", "preview");
-  showTab(["preview", "android", "procs"].includes(tab) ? tab : "preview");
-  showCode(store.get("fs:code", false) || tab === "code");
+  showTab(tab);
+  setDroidView(store.get("fs:droidView", "run"));
+  setMode(store.get("fs:mode", tab === "code" || store.get("fs:code", false) ? "editor" : "agent"), false);
   let start = store.get(pkey("cur"), null);
   if (hashProject) {
     try { start = (await api("/api/projects/add", { path: hashProject })).path; await loadState(); } catch (e) { toast(e.message, true); }

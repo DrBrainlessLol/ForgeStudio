@@ -69,9 +69,15 @@
 <!-- ============ WINDOW ============ -->
 <header class="titlebar">
   <button class="tb-btn" id="btnSidebar" title="Show / hide sidebar"><svg class="ic"><use href="#i-sidebar"/></svg></button>
-  <button class="tb-btn tb-code" id="btnCode" title="Show / hide the code editor"><svg class="ic"><use href="#i-code"/></svg><span>Code</span></button>
-  <div class="tb-title"><img src="icon.svg" alt=""><span>Forge Studio</span><span class="crumb" id="crumb"></span></div>
+  <div class="tb-title"><img src="icon.svg" alt=""><span>Forge Studio</span></div>
+  <button class="tb-proj" id="btnProj" title="Switch project"><svg class="ic"><use href="#i-folder"/></svg><span id="crumb">Open a project</span><svg class="ic chev"><use href="#i-chevron"/></svg></button>
+  <nav class="modes" id="modes">
+    <button data-mode="agent" title="Agent — chat with the agent, previews and tasks (Ctrl+1)"><svg class="ic"><use href="#i-bot"/></svg> Agent</button>
+    <button data-mode="editor" title="Editor — files, code, search and Git with the agent beside you (Ctrl+2)"><svg class="ic"><use href="#i-code"/></svg> Editor</button>
+    <button data-mode="android" title="Android — build, run and debug apps with Gradle (Ctrl+3)"><svg class="ic"><use href="#i-phone"/></svg> Android</button>
+  </nav>
   <div class="spacer"></div>
+  <button class="tb-btn" id="btnAgent" title="Show / hide the agent chat (Ctrl+J)"><svg class="ic flip"><use href="#i-sidebar"/></svg></button>
   <span class="conn" id="conn" title="Server connection"></span>
   <button class="tb-btn" id="btnSettings" title="Settings"><svg class="ic"><use href="#i-settings"/></svg></button>
   <button class="tb-profile" id="btnProfile" title="Profile"><span class="avatar" id="avatar"></span><span id="profileName"></span></button>
@@ -79,9 +85,12 @@
 
 <div class="layout" id="layout">
   <aside class="sidebar">
+    <button class="btn side-new" id="btnSideNew"><svg class="ic"><use href="#i-chat-plus"/></svg> New agent task</button>
     <div class="side-search"><svg class="ic"><use href="#i-search"/></svg><input id="projFilter" placeholder="Search"></div>
     <div class="side-section"><span>Projects</span><button class="icon-btn" id="btnAdd" title="Add a project folder"><svg class="ic"><use href="#i-plus"/></svg></button></div>
     <ul id="projList" class="source-list"></ul>
+    <div class="side-section"><span>Tasks</span></div>
+    <ul id="taskList" class="task-list"></ul>
     <details class="side-status">
       <summary>System</summary>
       <div id="toolStatus"></div>
@@ -132,7 +141,7 @@
           <div class="ed-tabs-row">
             <div class="ed-tabs" id="edTabs"></div>
             <button class="icon-btn" id="btnShowSide" title="Show file panel" hidden><svg class="ic"><use href="#i-sidebar"/></svg></button>
-            <button class="btn small plain" id="btnEdAsk" title="Send the file or selection to the agent"><svg class="ic"><use href="#i-sparkles"/></svg> Ask agent</button>
+            <button class="btn small plain" id="btnEdAsk" title="Send the file or selection to the agent"><svg class="ic"><use href="#i-bot"/></svg> Ask agent</button>
             <button class="icon-btn" id="btnEdSave" title="Save (Ctrl+S)"><svg class="ic"><use href="#i-save"/></svg></button>
           </div>
           <div class="ed-crumbs" id="edCrumbs"></div>
@@ -141,7 +150,154 @@
         </div>
       </div>
     </section>
-    <div class="resizer" id="codeSplit" hidden></div>
+
+    <!-- ANDROID MODE -->
+    <section class="droidpane" id="droidPane" hidden>
+      <div class="run-bar">
+        <select id="moduleSel" title="App module"></select>
+        <select id="variantSel" title="Build variant"><option value="Debug">debug</option><option value="Release">release</option></select>
+        <span class="run-sep"></span>
+        <svg class="ic dim"><use href="#i-phone"/></svg>
+        <select id="deviceSel" class="grow" title="Device"></select>
+        <button class="icon-btn" id="btnDevRefresh" title="Refresh devices"><svg class="ic"><use href="#i-refresh"/></svg></button>
+        <span class="run-sep"></span>
+        <button class="btn primary run" id="btnRun" title="Build, install and launch (logcat starts automatically)"><svg class="ic"><use href="#i-play"/></svg> Run</button>
+        <button class="icon-btn" id="btnRestart" title="Restart the app without rebuilding"><svg class="ic"><use href="#i-restart"/></svg></button>
+        <button class="icon-btn" id="btnStopApp" title="Stop the app"><svg class="ic"><use href="#i-stop"/></svg></button>
+        <button class="icon-btn" id="btnBuild" title="Build APK"><svg class="ic"><use href="#i-package"/></svg></button>
+        <div class="spacer"></div>
+        <button class="btn small plain" id="btnNewApp" title="Create a new Android app with a Gradle wrapper"><svg class="ic"><use href="#i-plus"/></svg> New app</button>
+        <button class="icon-btn" id="btnStudio" title="Open in Android Studio"><svg class="ic"><use href="#i-external"/></svg></button>
+      </div>
+      <div class="warnbox slim" id="devHint" hidden></div>
+      <div class="warnbox slim" id="wrapperHint" hidden>
+        This project has no Gradle wrapper (<code>gradlew</code>), so it can't be built yet.
+        <button class="btn small primary" id="btnWrapper">Add Gradle wrapper</button>
+      </div>
+      <nav class="droid-tabs" id="droidTabs">
+        <button data-dv="run" class="active"><svg class="ic"><use href="#i-bug"/></svg> Run &amp; Logcat</button>
+        <button data-dv="build"><svg class="ic"><use href="#i-package"/></svg> Build<span class="dt-dot" id="buildDot" hidden></span></button>
+        <button data-dv="gradle"><svg class="ic"><use href="#i-terminal"/></svg> Gradle</button>
+        <button data-dv="devices"><svg class="ic"><use href="#i-wifi"/></svg> Devices</button>
+        <div class="spacer"></div>
+        <span class="dim small-text" id="androidInfo"></span>
+      </nav>
+
+      <!-- run: device screen + logcat -->
+      <div class="droid-view live" data-dv="run" id="live">
+        <div class="live-grid">
+          <div class="screen-col">
+            <div class="row wrap">
+              <button class="btn primary small" id="btnMirror"><svg class="ic"><use href="#i-cast"/></svg> Show screen</button>
+              <button class="btn small" id="btnScrcpy" title="Smooth, real-time mirror in its own window (scrcpy)"><svg class="ic"><use href="#i-external"/></svg> Smooth window</button>
+              <button class="icon-btn" id="btnShot" title="Screenshot"><svg class="ic"><use href="#i-camera"/></svg></button>
+              <span class="dim" id="mirrorStat"></span>
+            </div>
+            <div class="mirror-wrap" id="mirrorWrap" hidden>
+              <div class="mirror-screen"><img id="mirrorImg" alt="Device screen" draggable="false"><canvas id="mirrorCanvas" hidden></canvas></div>
+              <div class="mirror-keys">
+                <button class="icon-btn" id="kBack" title="Back"><svg class="ic"><use href="#i-back"/></svg></button>
+                <button class="icon-btn" id="kHome" title="Home"><svg class="ic"><use href="#i-home"/></svg></button>
+                <button class="icon-btn" id="kRecents" title="Recent apps"><svg class="ic"><use href="#i-recents"/></svg></button>
+                <button class="icon-btn" id="kPower" title="Power"><svg class="ic"><use href="#i-power"/></svg></button>
+                <button class="icon-btn" id="kVolUp" title="Volume up"><svg class="ic"><use href="#i-vol-up"/></svg></button>
+                <button class="icon-btn" id="kVolDown" title="Volume down"><svg class="ic"><use href="#i-vol-down"/></svg></button>
+              </div>
+            </div>
+            <div class="row" id="typeRow" hidden>
+              <input id="typeText" class="grow" placeholder="Type into the phone, Enter to send">
+              <button class="icon-btn" id="btnType"><svg class="ic"><use href="#i-keyboard"/></svg></button>
+            </div>
+            <p class="dim small-text">Click to tap, drag to swipe, hold to long-press. <span id="mirrorNote"></span></p>
+          </div>
+          <div class="logcat-col">
+            <div class="crash" id="crashBar" hidden>
+              <svg class="ic"><use href="#i-alert"/></svg> <span id="crashText">The app crashed.</span>
+              <div class="spacer"></div>
+              <button class="btn primary small" id="btnCrashFix"><svg class="ic"><use href="#i-bot"/></svg> Ask to fix</button>
+              <button class="icon-btn" id="btnCrashClose"><svg class="ic"><use href="#i-x"/></svg></button>
+            </div>
+            <div class="row wrap logcat-bar">
+              <button class="btn small" id="btnLogcat"><svg class="ic"><use href="#i-play"/></svg> <span>Start logcat</span></button>
+              <select id="lcScope" title="Which logs"><option value="app">This app only</option><option value="all">Whole device</option></select>
+              <select id="lcLevel" title="Minimum level">
+                <option value="V">Verbose</option><option value="D">Debug</option><option value="I">Info</option>
+                <option value="W">Warn</option><option value="E">Error</option>
+              </select>
+              <div class="search grow"><svg class="ic"><use href="#i-search"/></svg><input id="lcSearch" placeholder="Filter"></div>
+              <button class="icon-btn" id="btnLcPause" title="Pause auto-scroll"><svg class="ic"><use href="#i-pause"/></svg></button>
+              <button class="icon-btn" id="btnLcClear" title="Clear"><svg class="ic"><use href="#i-trash"/></svg></button>
+              <button class="btn small" id="btnLcAsk" title="Send the visible log to the chat"><svg class="ic"><use href="#i-bot"/></svg> Ask</button>
+            </div>
+            <div class="logcat" id="logcat"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- build output -->
+      <div class="droid-view console" data-dv="build" hidden>
+        <div class="console-head">
+          <span id="consoleTitle">Build output</span>
+          <div class="spacer"></div>
+          <button class="btn primary small" id="btnFix" hidden><svg class="ic"><use href="#i-bot"/></svg> Ask to fix</button>
+          <button class="btn small" id="btnConsoleStop" hidden><svg class="ic"><use href="#i-stop"/></svg> Stop</button>
+          <button class="btn small plain" id="btnConsoleClear">Clear</button>
+        </div>
+        <pre id="andLog"></pre>
+      </div>
+
+      <!-- gradle tasks -->
+      <div class="droid-view scroll" data-dv="gradle" hidden>
+        <div class="group">
+          <h3>Run a task</h3>
+          <div class="row">
+            <input id="gradleTask" class="mono grow" placeholder="./gradlew …  e.g. clean, :app:assembleRelease, test --info">
+            <button class="btn primary" id="btnTask"><svg class="ic"><use href="#i-play"/></svg> Run task</button>
+          </div>
+          <div class="chips" id="taskChips"></div>
+        </div>
+        <div class="group">
+          <h3>Toolchain</h3>
+          <div class="kv" id="toolchain"></div>
+        </div>
+      </div>
+
+      <!-- devices -->
+      <div class="droid-view scroll" data-dv="devices" hidden>
+        <div class="cards">
+          <div class="group">
+            <h3>Emulator</h3>
+            <div class="row" id="avdRow" hidden>
+              <select id="avdSel" class="grow"></select>
+              <button class="btn" id="btnAvd"><svg class="ic"><use href="#i-monitor"/></svg> Launch</button>
+            </div>
+            <p class="dim small-text" id="avdNone">No virtual devices found. Create one in Android Studio → Device Manager.</p>
+          </div>
+          <div class="group">
+            <h3>Connect over Wi-Fi</h3>
+            <p class="dim small-text">On the phone: Developer options → Wireless debugging. Use “Pair device with pairing code” the first time, then connect with the IP:port shown on the main screen.</p>
+            <div class="row"><input id="wifiAddr" placeholder="192.168.1.20:37123" class="grow"><input id="wifiCode" placeholder="Pair code" size="9"><button class="btn" id="btnWifi">Connect</button></div>
+          </div>
+          <div class="group">
+            <h3>Reach a local dev server</h3>
+            <p class="dim small-text">Forwards the phone's localhost:PORT to this computer (adb reverse), so a WebView or API client in your app can load your preview server.</p>
+            <div class="row"><input id="revPort" placeholder="3000" size="8"><button class="btn" id="btnReverse">Forward port</button></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- not an android project -->
+      <div class="droid-empty" id="droidEmpty" hidden>
+        <svg class="ic big"><use href="#i-phone"/></svg>
+        <h2>No Android app here</h2>
+        <p class="dim" id="droidEmptyText">This project isn't an Android Gradle project.</p>
+        <div class="tiles">
+          <button class="tile" id="tileNewApp"><svg class="ic"><use href="#i-plus"/></svg><span>New Android app</span></button>
+          <button class="tile" id="tileOpenApp"><svg class="ic"><use href="#i-folder"/></svg><span>Open an app folder</span></button>
+        </div>
+      </div>
+      <div class="shot" id="shotBox" hidden><img id="shotImg" alt="Device screenshot"><button class="btn small" id="btnShotClose">Close</button></div>
+    </section>
 
     <section class="chat" id="chatPane">
       <div class="pane-head">
@@ -177,6 +333,7 @@
           <button type="submit" class="btn primary send" id="btnSend" title="Send (Enter)"><svg class="ic"><use href="#i-send"/></svg></button>
         </div>
       </form>
+      <div class="home-chips" id="homeChips" hidden></div>
     </section>
 
     <div class="resizer" id="resizer"></div>
@@ -185,7 +342,6 @@
       <div class="pane-head center">
         <nav class="segmented tabs">
           <button data-tab="preview" class="active"><svg class="ic"><use href="#i-globe"/></svg> Preview</button>
-          <button data-tab="android"><svg class="ic"><use href="#i-phone"/></svg> Android</button>
           <button data-tab="procs"><svg class="ic"><use href="#i-terminal"/></svg> Processes</button>
         </nav>
       </div>
@@ -221,121 +377,6 @@
         <details class="logbox" id="prevLogBox"><summary>Server log</summary><pre id="prevLog"></pre></details>
       </div>
 
-      <!-- ANDROID -->
-      <div class="tab scroll" id="tab-android" hidden>
-        <p class="dim note">Android Studio doesn't need to be open — builds run through Gradle and your phone is reached with adb.</p>
-        <div class="cards">
-          <div class="group">
-            <h3>Device</h3>
-            <div class="row">
-              <select id="deviceSel" class="grow"></select>
-              <button class="icon-btn" id="btnDevRefresh" title="Refresh devices"><svg class="ic"><use href="#i-refresh"/></svg></button>
-            </div>
-            <div class="warnbox" id="devHint" hidden></div>
-            <div class="row" id="avdRow" hidden>
-              <select id="avdSel" class="grow"></select>
-              <button class="btn" id="btnAvd"><svg class="ic"><use href="#i-monitor"/></svg> Launch emulator</button>
-            </div>
-            <details class="disclosure">
-              <summary>Connect over Wi-Fi</summary>
-              <p class="dim">On the phone: Developer options → Wireless debugging. Use “Pair device with pairing code” the first time, then connect with the IP:port shown on the main screen.</p>
-              <div class="row"><input id="wifiAddr" placeholder="192.168.1.20:37123" class="grow"><input id="wifiCode" placeholder="Pair code" size="9"><button class="btn" id="btnWifi">Connect</button></div>
-            </details>
-            <details class="disclosure">
-              <summary>Reach a local dev server from the device</summary>
-              <p class="dim">Forwards the phone's localhost:PORT to this computer (adb reverse), so a WebView or API client in your app can load your preview server.</p>
-              <div class="row"><input id="revPort" placeholder="3000" size="8"><button class="btn" id="btnReverse">Forward port</button></div>
-            </details>
-          </div>
-
-          <div class="group" id="androidProj">
-            <h3>App</h3>
-            <div id="androidInfo" class="dim"></div>
-            <div class="row" id="moduleRow">
-              <label class="dim">Module</label><select id="moduleSel" class="grow"></select>
-            </div>
-            <div class="row wrap">
-              <button class="btn primary" id="btnRun"><svg class="ic"><use href="#i-play"/></svg> Run app</button>
-              <button class="btn" id="btnRestart" title="Force-stop and relaunch without rebuilding"><svg class="ic"><use href="#i-restart"/></svg> Restart</button>
-              <button class="btn" id="btnStopApp"><svg class="ic"><use href="#i-stop"/></svg> Stop</button>
-              <button class="btn" id="btnBuild"><svg class="ic"><use href="#i-package"/></svg> Build APK</button>
-              <button class="btn" id="btnStudio"><svg class="ic"><use href="#i-code"/></svg> Android Studio</button>
-            </div>
-            <div class="row">
-              <input id="gradleTask" class="mono grow" placeholder="Gradle task, e.g. clean or :app:assembleRelease">
-              <button class="btn" id="btnTask">Run task</button>
-            </div>
-          </div>
-        </div>
-
-        <section class="group live" id="live">
-          <div class="live-head">
-            <h3>Live debug</h3>
-            <span class="dim">Use the app on the phone (or in the screen view) and watch its log at the same time.</span>
-          </div>
-          <div class="live-grid">
-            <div class="screen-col">
-              <div class="row wrap">
-                <button class="btn primary small" id="btnMirror"><svg class="ic"><use href="#i-cast"/></svg> Show screen</button>
-                <button class="btn small" id="btnScrcpy" title="Smooth, real-time mirror in its own window (scrcpy)"><svg class="ic"><use href="#i-external"/></svg> Smooth window</button>
-                <button class="icon-btn" id="btnShot" title="Screenshot"><svg class="ic"><use href="#i-camera"/></svg></button>
-                <span class="dim" id="mirrorStat"></span>
-              </div>
-              <div class="mirror-wrap" id="mirrorWrap" hidden>
-                <div class="mirror-screen"><img id="mirrorImg" alt="Device screen" draggable="false"></div>
-                <div class="mirror-keys">
-                  <button class="icon-btn" id="kBack" title="Back"><svg class="ic"><use href="#i-back"/></svg></button>
-                  <button class="icon-btn" id="kHome" title="Home"><svg class="ic"><use href="#i-home"/></svg></button>
-                  <button class="icon-btn" id="kRecents" title="Recent apps"><svg class="ic"><use href="#i-recents"/></svg></button>
-                  <button class="icon-btn" id="kPower" title="Power"><svg class="ic"><use href="#i-power"/></svg></button>
-                  <button class="icon-btn" id="kVolUp" title="Volume up"><svg class="ic"><use href="#i-vol-up"/></svg></button>
-                  <button class="icon-btn" id="kVolDown" title="Volume down"><svg class="ic"><use href="#i-vol-down"/></svg></button>
-                </div>
-              </div>
-              <div class="row" id="typeRow" hidden>
-                <input id="typeText" class="grow" placeholder="Type into the phone, Enter to send">
-                <button class="icon-btn" id="btnType"><svg class="ic"><use href="#i-keyboard"/></svg></button>
-              </div>
-              <p class="dim small-text">Click to tap, drag to swipe, hold to long-press. This view refreshes every 1–3 s; the smooth window is real-time.</p>
-            </div>
-
-            <div class="logcat-col">
-              <div class="crash" id="crashBar" hidden>
-                <svg class="ic"><use href="#i-alert"/></svg> <span id="crashText">The app crashed.</span>
-                <div class="spacer"></div>
-                <button class="btn primary small" id="btnCrashFix"><svg class="ic"><use href="#i-sparkles"/></svg> Ask to fix</button>
-                <button class="icon-btn" id="btnCrashClose"><svg class="ic"><use href="#i-x"/></svg></button>
-              </div>
-              <div class="row wrap logcat-bar">
-                <button class="btn small" id="btnLogcat"><svg class="ic"><use href="#i-play"/></svg> <span>Start logcat</span></button>
-                <select id="lcScope" title="Which logs"><option value="app">This app only</option><option value="all">Whole device</option></select>
-                <select id="lcLevel" title="Minimum level">
-                  <option value="V">Verbose</option><option value="D">Debug</option><option value="I">Info</option>
-                  <option value="W">Warn</option><option value="E">Error</option>
-                </select>
-                <div class="search grow"><svg class="ic"><use href="#i-search"/></svg><input id="lcSearch" placeholder="Filter"></div>
-                <button class="icon-btn" id="btnLcPause" title="Pause auto-scroll"><svg class="ic"><use href="#i-pause"/></svg></button>
-                <button class="icon-btn" id="btnLcClear" title="Clear"><svg class="ic"><use href="#i-trash"/></svg></button>
-                <button class="btn small" id="btnLcAsk" title="Send the visible log to the chat"><svg class="ic"><use href="#i-sparkles"/></svg> Ask</button>
-              </div>
-              <div class="logcat" id="logcat"></div>
-            </div>
-          </div>
-        </section>
-
-        <div class="console">
-          <div class="console-head">
-            <span id="consoleTitle">Build output</span>
-            <div class="spacer"></div>
-            <button class="btn primary small" id="btnFix" hidden><svg class="ic"><use href="#i-sparkles"/></svg> Ask to fix</button>
-            <button class="btn small" id="btnConsoleStop" hidden><svg class="ic"><use href="#i-stop"/></svg> Stop</button>
-            <button class="btn small plain" id="btnConsoleClear">Clear</button>
-          </div>
-          <pre id="andLog"></pre>
-        </div>
-        <div class="shot" id="shotBox" hidden><img id="shotImg" alt="Device screenshot"><button class="btn small" id="btnShotClose">Close</button></div>
-      </div>
-
       <!-- PROCESSES -->
       <div class="tab" id="tab-procs" hidden>
         <ul id="procList" class="procs"></ul>
@@ -344,6 +385,7 @@
     </section>
   </main>
 </div>
+<footer class="statusbar" id="statusbar"></footer>
 
 <!-- ============ ADD PROJECT ============ -->
 <dialog id="dlgAdd" class="sheet">
@@ -352,6 +394,28 @@
     <div class="row"><input id="addPath" class="grow mono" placeholder="/home/you/AndroidStudioProjects/MyApp"><button type="button" class="btn" id="addUp"><svg class="ic"><use href="#i-up"/></svg> Up</button></div>
     <ul id="addDirs" class="dirs"></ul>
     <div class="row end"><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Add Folder</button></div>
+  </form>
+</dialog>
+
+<!-- ============ NEW ANDROID APP ============ -->
+<dialog id="dlgNewApp" class="sheet">
+  <form method="dialog" id="newAppForm">
+    <h3>New Android app</h3>
+    <div class="templates" id="naTemplates">
+      <button type="button" class="tpl active" data-tpl="compose"><b>Empty Compose activity</b><span class="dim">Jetpack Compose + Material 3</span></button>
+      <button type="button" class="tpl" data-tpl="views"><b>Empty Views activity</b><span class="dim">XML layouts + AppCompat</span></button>
+    </div>
+    <label class="field">App name<input id="naName" placeholder="My App" autocomplete="off"></label>
+    <label class="field">Package name<input id="naPkg" class="mono" placeholder="com.example.myapp" autocomplete="off"></label>
+    <div class="row">
+      <label class="field grow">Save location<input id="naParent" class="mono" placeholder="~/AndroidStudioProjects"></label>
+      <label class="field">Minimum SDK<select id="naMin">
+        <option value="21">API 21 · Android 5.0</option><option value="24" selected>API 24 · Android 7.0</option>
+        <option value="26">API 26 · Android 8.0</option><option value="29">API 29 · Android 10</option><option value="31">API 31 · Android 12</option>
+      </select></label>
+    </div>
+    <p class="dim small-text" id="naInfo">Kotlin DSL, a version catalog and a Gradle wrapper are generated for you, and Git is initialised.</p>
+    <div class="row end"><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Create app</button></div>
   </form>
 </dialog>
 
@@ -417,6 +481,19 @@
             </select>
           </div>
           <p class="dim form-note">In the “ask” modes, risky actions (deleting files, sudo, force-push, installing software…) show a warning card in the chat and wait for you to allow or deny them.</p>
+        </div>
+        <h4>Notifications</h4>
+        <div class="form-group">
+          <div class="form-row"><span>Desktop notifications<br><small class="dim" id="notifState"></small></span><label class="switch"><input type="checkbox" id="setNotify"><i></i></label></div>
+          <div class="form-row"><span>Play a sound</span><label class="switch"><input type="checkbox" id="setSound"><i></i></label></div>
+          <div class="form-row top"><span>Notify me when</span>
+            <div class="checks">
+              <label class="check"><input type="checkbox" id="nApproval"> The agent needs approval</label>
+              <label class="check"><input type="checkbox" id="nDone"> An agent task finishes</label>
+              <label class="check"><input type="checkbox" id="nBuild"> A Gradle build finishes or fails</label>
+              <label class="check"><input type="checkbox" id="nCrash"> My app crashes</label>
+            </div></div>
+          <div class="form-row"><span>Check that it works</span><button class="btn" id="btnTestNotify">Send a test</button></div>
         </div>
         <div class="form-group">
           <div class="form-row"><span>Hide test profiles on the sign-in screen<br><small class="dim">profiles you mark as “test” in Profile &amp; Account</small></span><label class="switch"><input type="checkbox" id="setHideTest"><i></i></label></div>

@@ -9,6 +9,17 @@ It uses only the Python standard library and runs as a desktop web app (Chromium
 - Android Studio: **Tools → External Tools → Open in Forge Studio**
 - Other devices: **Settings → Web App → Use from phones and other computers** (port 8766, needs the link with its token)
 
+## Workspaces
+Switch at the top of the window (or **Ctrl+1 / 2 / 3**). The agent chat comes with you in every mode.
+- **Agent**: projects and running/finished agent tasks on the left, the chat in the middle (a "What should we build?" home screen with suggestions when it's empty), and Preview / Processes on the right.
+- **Editor**: a familiar IDE layout. Explorer, search and source control on the left, tabbed code editor in the middle, the agent docked on the right.
+- **Android**: a run bar (module, debug/release, device, Run / Restart / Stop / Build), then **Run & Logcat** (screen mirror + app logcat), **Build** output, **Gradle** tasks and toolchain, and **Devices** (emulators, Wi-Fi pairing, port forwarding).
+  - **New app** creates a Compose or Views app with Kotlin DSL, a version catalog, Git and a real Gradle wrapper (AGP 8.7.3 / Gradle 8.10.2 / Kotlin 2.0.21).
+  - Projects without `gradlew` get an **Add Gradle wrapper** button.
+  - Gradle runs on a JDK it supports, picked automatically (e.g. JDK 17 for Gradle 8.10 even if Android Studio's bundled JDK is newer).
+
+The status bar shows the Git branch, the project, the agent's state and (in Android mode) the device and Gradle version.
+
 ## Agents
 | Agent | Support |
 |---|---|

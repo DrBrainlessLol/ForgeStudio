@@ -256,7 +256,7 @@ function treeMenu(ev, rel, isDir) {
   if (rel && !isDir) items.push(
     { label: "Open in Browser", icon: "external", fn: () => open(fileUrl(abs), "_blank") },
     { label: "Download", icon: "download", fn: () => open(fileUrl(abs, true), "_blank") },
-    { label: "Ask agent about this", icon: "sparkles", fn: () => askAgentAbout(rel) },
+    { label: "Ask agent about this", icon: "bot", fn: () => askAgentAbout(rel) },
     { label: "Reveal in Source Control", icon: "branch", fn: () => { setView("git"); } },
   );
   showMenu(ev.clientX, ev.clientY, items);
@@ -418,7 +418,7 @@ function renderCrumbs(t) {
   const c = $("#edCrumbs");
   if (!t) { c.innerHTML = ""; return; }
   const parts = t.path.split("/");
-  c.innerHTML = [project()?.name, ...parts].map((p, i) => `<span>${esc(p)}</span>${i < parts.length ? '<span class="sep">›</span>' : ""}`).join("");
+  c.innerHTML = [project()?.name, ...parts].map((p, i) => `<span>${esc(p)}</span>${i < parts.length ? `<span class="sep">${ic("chevron-right")}</span>` : ""}`).join("");
 }
 function renderStatus(t) {
   const s = $("#edStatus");
@@ -441,7 +441,7 @@ function welcomeEl() {
     ["file-plus", "New File", () => newEntry(false)],
     ["search", "Search", () => setView("search")],
     ["branch", "Source Control", () => setView("git")],
-    ["sparkles", "Ask the agent", () => { $("#prompt")?.focus(); }, true],
+    ["bot", "Ask the agent", () => { $("#prompt")?.focus(); }, true],
   ];
   el.innerHTML = `<img src="icon.svg" alt=""><h1>Forge Studio</h1><div class="sub">${esc(project()?.name || "")}</div>`;
   const grid = document.createElement("div"); grid.className = "tiles";
@@ -451,7 +451,7 @@ function welcomeEl() {
   }
   el.append(grid);
   const pill = document.createElement("button"); pill.className = "pill";
-  pill.innerHTML = `${ic("sparkles")} Ask the agent to walk you through this project ${ic("external")}`;
+  pill.innerHTML = `${ic("bot")} Ask the agent to walk you through this project ${ic("external")}`;
   pill.onclick = () => { $("#prompt").value = `Give me a tour of this project (${project()?.name}): what it does, the main files, and how to run it.`; $("#prompt").focus(); };
   el.append(pill);
   return el;
@@ -752,6 +752,7 @@ async function loadGit() {
   if ($("#tree").children.length) renderTree();
   const cur = edActive(); if (cur) renderStatus(cur);
   if (C.view === "git") renderGit();
+  if (typeof renderStatusBar === "function") renderStatusBar();
 }
 async function gitDo(action, body, quiet) {
   await act(async () => {
@@ -786,7 +787,7 @@ function renderGit() {
     ? `<div class="git-track">${g.behind ? `<span>${ic("arrow-down")} ${g.behind}</span>` : ""}${g.ahead ? `<span>${ic("arrow-up")} ${g.ahead}</span>` : ""}<span class="up">${esc(g.upstream || "no upstream")}</span></div>` : "";
   wrap.innerHTML = branchSel + track
     + `<div class="git-commit"><div class="git-msg-wrap"><textarea id="gMsg" placeholder="Message (Ctrl+Enter to commit)"></textarea>`
-    + `<button class="git-ai" id="gAI" title="Generate a commit message from your changes">${ic("sparkles")}</button></div>`
+    + `<button class="git-ai" id="gAI" title="Generate a commit message from your changes">${ic("bot")}</button></div>`
     + `<label class="check"><input type="checkbox" id="gAmend"> Amend last commit</label>`
     + `<button class="btn primary" id="gCommit" style="width:100%;margin-top:6px">${ic("commit")} Commit${staged.length ? "" : " All"}</button></div>`;
   wrap.append(gitSection("Staged Changes", staged, true));

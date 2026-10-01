@@ -452,18 +452,6 @@ dialog h3 { margin: 0 0 10px; font-size: 1.1em; }
 .composer-bar { flex-wrap: nowrap; }
 .composer-bar select { min-width: 0; flex-shrink: 1; }
 .settings-nav button:focus-visible { box-shadow: none; border-color: transparent; }
-/* minimized side panel */
-.layout.no-panel .panel, .layout.no-panel .resizer { display: none; }
-.layout.no-panel .chat { width: 100% !important; flex: 1; }
-#btnTogglePanel .ic { transform: scaleX(-1); }
-/* Code tab: the panel moves to the left of the chat, like an IDE (Preview / Android / Processes stay on the right) */
-@media (min-width: 901px) {
-  .layout.code-left .panel { order: 1; }
-  .layout.code-left .resizer { order: 2; }
-  .layout.code-left .chat { order: 3; }
-  .layout.code-left #btnTogglePanel .ic { transform: none; }
-}
-
 /* ============================================================ code editor & git */
 :root, [data-theme="dark"] {
   --t-kw: #ff7ab2; --t-str: #9ece6a; --t-com: #5b6270; --t-num: #ff9e64; --t-fn: #7aa2f7;
@@ -674,3 +662,151 @@ dialog.palette input { width: 100%; height: 40px; border: 0 !important; border-b
 .code-resizer { width: 1px; background: var(--line); cursor: col-resize; flex: none; position: relative; }
 .code-resizer::after { content: ""; position: absolute; inset: 0 -3px; }
 .code-resizer:hover, .code-resizer.drag { background: var(--accent); }
+
+/* ============================================================ workspaces: Agent · Editor · Android */
+.layout { height: calc(100% - 44px - 24px); }
+.titlebar { position: relative; }
+.tb-proj { display: flex; align-items: center; gap: 6px; height: 28px; max-width: 260px; padding: 0 8px; margin-left: 4px; border: 0; border-radius: 7px; background: transparent; color: var(--text); font-weight: 500; cursor: default; }
+.tb-proj:hover { background: var(--hover); }
+.tb-proj .ic { color: var(--dim); }
+.tb-proj .chev { width: 12px; height: 12px; }
+.tb-proj #crumb { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modes { position: absolute; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px; background: var(--hover); border: 0.5px solid var(--line); border-radius: 10px; }
+.modes button { height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 14px; border: 0; border-radius: 7px; background: transparent; color: var(--dim); font-weight: 500; cursor: default; transition: background .12s, color .12s; }
+.modes button:hover { color: var(--text); }
+.modes button.active { background: var(--control-active); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .3), inset 0 0 0 0.5px var(--line-strong); }
+[data-theme="light"] .modes button.active { background: #fff; }
+.modes button.active .ic { color: var(--accent); }
+
+/* pane order per mode: Agent = chat | panel, IDE modes = workspace | docked chat */
+.codepane, .droidpane { order: 0; flex: 1; width: auto; min-width: 360px; display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+.codepane[hidden], .droidpane[hidden] { display: none; }
+.chat { order: 1; }
+.resizer { order: 2; }
+.panel { order: 3; }
+body[data-mode="agent"] .chat { flex: 1; width: auto; }
+body[data-mode="agent"] .panel { flex: none; width: 46%; }
+body[data-mode="agent"] .layout.no-panel .panel, body[data-mode="agent"] .layout.no-panel .resizer { display: none; }
+body:not([data-mode="agent"]) .panel { display: none; }
+body:not([data-mode="agent"]) .chat { order: 3; flex: none; min-width: 300px; background: var(--sidebar); }
+body:not([data-mode="agent"]) .chat .messages { padding: 14px; }
+body:not([data-mode="agent"]) .chat .composer { margin: 0 10px 10px; }
+
+/* agent mode: a centred reading column */
+body[data-mode="agent"] .messages { padding-left: max(20px, calc((100% - 820px) / 2)); padding-right: max(20px, calc((100% - 820px) / 2)); }
+body[data-mode="agent"] .composer { width: min(820px, calc(100% - 28px)); margin: 0 auto 14px; }
+
+/* agent home */
+.chat.home .messages { flex: none; margin-top: auto; overflow: visible; padding-bottom: 8px; }
+.chat.home .composer { box-shadow: 0 10px 34px rgba(0, 0, 0, .22); }
+.home-hero { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.home-hero img { width: 54px; height: 54px; margin-bottom: 14px; filter: drop-shadow(0 8px 24px var(--accent-soft)); }
+.home-hero h1, .home-hero h2 { margin: 0; font-size: 1.6em; letter-spacing: -.015em; line-height: 1.25; }
+.home-hero h1 { font-weight: 500; color: var(--dim); }
+.home-hero h2 { font-weight: 600; margin-bottom: 14px; }
+.home-hero h2 b { color: var(--accent); font-weight: 600; }
+.home-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; width: min(820px, calc(100% - 28px)); margin: 0 auto auto; padding-bottom: 28px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 15px; border: 0.5px dashed var(--line-strong); background: transparent; color: var(--dim); font-size: .95em; cursor: default; transition: background .12s, color .12s; }
+.chip:hover { color: var(--text); background: var(--hover); border-style: solid; }
+.chip .ic { width: 13px; height: 13px; }
+.chip.mono { font-family: var(--mono); font-size: 11.5px; height: 26px; border-radius: 6px; }
+
+/* sidebar: new task + tasks */
+.side-new { width: 100%; justify-content: flex-start; height: 32px; margin-bottom: 8px; font-weight: 500; flex: none; }
+.side-new .ic { color: var(--accent); }
+.task-list { list-style: none; margin: 0; padding: 0 0 6px; max-height: 34%; overflow: auto; flex: none; }
+.task { display: flex; align-items: flex-start; gap: 9px; padding: 6px 10px; border-radius: 7px; cursor: default; }
+.task:hover { background: var(--hover); }
+.task-ic { width: 13px; height: 13px; border-radius: 50%; flex: none; margin-top: 3px; box-sizing: border-box; }
+.task.run .task-ic { border: 1.5px dashed var(--warn); animation: spin 4s linear infinite; }
+.task.ok .task-ic { border: 1.5px solid var(--ok); background: radial-gradient(var(--ok) 0 2.5px, transparent 3px); }
+.task-main { display: flex; flex-direction: column; min-width: 0; }
+.task-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-sub { font-size: .85em; color: var(--dim); }
+.empty-task { padding: 4px 10px; font-size: .9em; }
+
+/* status bar */
+.statusbar { height: 24px; display: flex; align-items: center; gap: 2px; padding: 0 6px; background: var(--sidebar); border-top: 0.5px solid var(--line); font-size: 11.5px; color: var(--dim); position: relative; z-index: 2; }
+.sb { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 0; background: transparent; color: inherit; border-radius: 4px; white-space: nowrap; cursor: default; }
+button.sb:hover { background: var(--hover); color: var(--text); }
+.sb .ic { width: 12px; height: 12px; }
+.sb.busy { color: var(--accent); }
+.sb.ok { color: var(--ok); }
+
+/* android mode */
+.run-bar { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px; flex: none; background: var(--sidebar); border-bottom: 0.5px solid var(--line); }
+.run-bar select { height: 28px; max-width: 200px; }
+.run-bar #deviceSel { max-width: 320px; }
+.run-bar .ic.dim { color: var(--dim); }
+.run-sep { width: 1px; height: 18px; background: var(--line-strong); margin: 0 4px; flex: none; }
+.btn.run { padding: 0 14px; }
+.warnbox.slim { margin: 8px 10px 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none; }
+.droid-tabs { display: flex; align-items: stretch; gap: 2px; height: 36px; padding: 0 8px; border-bottom: 0.5px solid var(--line); flex: none; }
+.droid-tabs button { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--dim); cursor: default; }
+.droid-tabs button:hover { color: var(--text); }
+.droid-tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+.droid-tabs #androidInfo { align-self: center; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dt-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.droid-view { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 10px; margin: 0; }
+.droid-view[hidden] { display: none; }
+.droid-view.scroll { display: block; overflow: auto; }
+.droid-view.scroll > .group + .group { margin-top: 10px; }
+.droid-view.scroll .cards { padding: 0; }
+.droid-view.live .live-grid { flex: 1; min-height: 0; margin-top: 0; grid-template-rows: minmax(0, 1fr); }
+.droid-view.live .logcat-col { min-height: 0; }
+.droid-view.live .logcat { flex: 1; height: auto; min-height: 200px; }
+.droid-view.console { height: auto; }
+.droid-view.console #andLog { flex: 1; min-height: 0; }
+.droidpane.no-app .droid-view, .droidpane.no-app .droid-tabs { display: none; }
+.droid-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 24px; text-align: center; color: var(--dim); }
+.droid-empty h2 { margin: 8px 0 0; color: var(--text); font-size: 1.3em; font-weight: 600; }
+.droid-empty .tiles { margin-top: 16px; }
+.tile > span { font-weight: 500; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.kv > div { display: flex; justify-content: space-between; gap: 14px; padding: 6px 0; border-top: 0.5px solid var(--line); }
+.kv > div:first-child { border-top: 0; }
+.kv .mono { text-align: right; overflow-wrap: anywhere; }
+
+/* new android app dialog */
+.templates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 4px; }
+.tpl { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 12px; border-radius: 10px; border: 0.5px solid var(--line-strong); background: var(--control); text-align: left; cursor: default; }
+.tpl:hover { background: var(--control-hover); }
+.tpl.active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.tpl span { font-size: .9em; }
+#dlgNewApp .field select, #dlgNewApp .field input { width: 100%; }
+
+@media (max-width: 900px) {
+  .modes { position: static; transform: none; }
+  .modes button { font-size: 0; padding: 0 10px; }
+  .tb-proj { max-width: 120px; }
+  .droidpane, .codepane { width: 100% !important; min-width: 0; min-height: 80vh; flex: none; }
+  body:not([data-mode="agent"]) .chat { order: 0; }
+  .statusbar .sb:not(:first-child) { display: none; }
+}
+.ed-crumbs .sep .ic { width: 11px; height: 11px; vertical-align: -1px; }
+#treeTitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+/* the docked agent is narrow: let the composer controls wrap instead of truncating */
+body:not([data-mode="agent"]) .composer-bar { flex-wrap: wrap; }
+body:not([data-mode="agent"]) .composer-bar select { max-width: 100%; flex-shrink: 0; }
+.cv-head #treeTitle + .spacer { display: none; }
+/* live screen: the canvas behaves like the screenshot image; Android mode gives it the full height */
+.mirror-screen canvas { display: block; max-height: 52vh; max-width: 100%; border-radius: 16px; cursor: pointer; user-select: none; touch-action: none; background: #050505; }
+.droid-view .mirror-screen img, .droid-view .mirror-screen canvas { max-height: calc(100vh - 260px); }
+.droid-view .screen-col { max-width: none; }
+/* hide / show the docked agent chat in Editor and Android modes */
+#btnAgent { display: none; }
+body:not([data-mode="agent"]) #btnAgent { display: grid; }
+#btnAgent.on { color: var(--text); }
+.ic.flip { transform: scaleX(-1); }
+body:not([data-mode="agent"]) .layout.no-agent .chat, body:not([data-mode="agent"]) .layout.no-agent .resizer { display: none; }
+/* commit box: keep the generate button inside the textarea's bottom-right corner */
+.git-msg-wrap textarea { display: block; width: 100%; box-sizing: border-box; padding-right: 38px; }
+.git-msg-wrap .git-ai { bottom: 7px; right: 7px; width: 24px; height: 24px; }
+.git-msg-wrap .git-ai .ic { width: 14px; height: 14px; }
+#btnTogglePanel .ic { transform: scaleX(-1); }
+.git-branchline select { min-width: 0; }
+.cv-head > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.checks { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.checks .check { color: var(--text); }
+/* the message box grows with what you type but never takes over the chat */
+.composer textarea { max-height: 30vh; }
