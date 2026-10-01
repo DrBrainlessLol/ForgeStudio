@@ -2,9 +2,9 @@
 pkgname=forge-studio
 pkgver=1.0.0
 pkgrel=1
-pkgdesc="AI coding agents with live website preview and Android tools"
+pkgdesc="Lightweight studio for AI coding agents with an editor, website preview and Android tools"
 arch=('any')
-url="https://localhost"
+url="https://github.com/DrBrainlessLol/ForgeStudio"
 license=('AGPL-3.0-only')
 depends=('python' 'curl')
 optdepends=('chromium: run in an app window'
@@ -13,7 +13,7 @@ optdepends=('chromium: run in an app window'
             'nodejs: npm dev-server previews'
             'npm: npm dev-server previews'
             'scrcpy: real-time phone mirror')
-source=("$pkgname-$pkgver.tar.gz")
+source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
 sha256sums=('SKIP')
 package() {
   cd "$srcdir/$pkgname-$pkgver"
@@ -28,4 +28,6 @@ package() {
     install -Dm644 "icons/$s.png" "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps/forge-studio.png"
   done
   install -Dm644 README.md "$pkgdir/usr/share/doc/forge-studio/README.md"
+  install -Dm644 THIRD_PARTY_NOTICES.md "$pkgdir/usr/share/doc/forge-studio/THIRD_PARTY_NOTICES.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/forge-studio/LICENSE"
 }

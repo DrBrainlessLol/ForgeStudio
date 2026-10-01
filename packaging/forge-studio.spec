@@ -1,9 +1,9 @@
 Name:           forge-studio
 Version:        1.0.0
 Release:        1%{?dist}
-Summary:        AI coding agents with live website preview and Android tools
+Summary:        Lightweight studio for AI coding agents with an editor, website preview and Android tools
 License:        AGPL-3.0-only
-URL:            https://localhost
+URL:            https://github.com/DrBrainlessLol/ForgeStudio
 BuildArch:      noarch
 Source0:        %{name}-%{version}.tar.gz
 Requires:       python3, curl
@@ -12,7 +12,8 @@ Recommends:     android-tools
 %description
 Forge Studio is a local desktop studio for AI coding agents (Claude Code, a
 built-in API-key engine, Codex and others) with a live website preview and
-Android build, run and live-debug tools. It runs entirely on this computer.
+Android build, run and live-debug tools, plus a built-in editor with Git.
+It runs entirely on this computer.
 %prep
 %setup -q
 %install
@@ -33,3 +34,5 @@ install -Dm644 README.md %{buildroot}/usr/share/doc/forge-studio/README.md
 /usr/share/applications/forge-studio.desktop
 /usr/share/icons/hicolor/*/apps/forge-studio.*
 /usr/share/doc/forge-studio/README.md
+%license LICENSE
+%doc THIRD_PARTY_NOTICES.md

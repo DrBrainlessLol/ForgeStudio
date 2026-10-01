@@ -47,10 +47,12 @@ Recommends: chromium | chromium-browser | google-chrome-stable
 Suggests: adb, default-jre, nodejs, npm, scrcpy
 Installed-Size: $INSTALLED_KB
 Maintainer: Forge Studio <forge@localhost>
-Description: AI coding agents with live website preview and Android tools
+Description: Lightweight studio for AI coding agents with an editor, website preview and Android tools
+Homepage: https://github.com/DrBrainlessLol/ForgeStudio
  Forge Studio is a local desktop studio for AI coding agents (Claude Code, a
- built-in API-key engine, Codex and any other CLI) with a live website preview
- and Android build, run and live-debug tools. It runs entirely on this computer.
+ built-in API-key engine, Codex and any other CLI). Switch between Agent,
+ Editor (files, search, Git) and Android (Gradle builds, new-app wizard, live
+ phone screen and logcat) workspaces. It runs entirely on this computer.
 EOF
 cat > "$DEB/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
@@ -73,7 +75,7 @@ echo "    $(basename "$DIST"/forge-studio_${VERSION}_all.deb)"
 echo "==> Building universal tarball"
 SRC="$WORK/forge-studio-$VERSION"
 mkdir -p "$SRC"
-cp "$ROOT/server.py" "$ROOT/forge-studio" "$ROOT/README.md" "$SRC/"
+cp "$ROOT/server.py" "$ROOT/forge-studio" "$ROOT/README.md" "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$SRC/"
 cp -r "$ROOT/static" "$SRC/"
 find "$SRC" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 cp -r "$HERE/icons" "$SRC/icons"
@@ -111,7 +113,7 @@ install -Dm644 "$SRC/icons/scalable.svg" "$PREFIX/share/icons/hicolor/scalable/a
 for s in 16 24 32 48 64 128 256 512; do
   install -Dm644 "$SRC/icons/$s.png" "$PREFIX/share/icons/hicolor/${s}x${s}/apps/forge-studio.png"
 done
-install -Dm644 "$SRC/README.md" "$PREFIX/share/doc/forge-studio/README.md"
+for f in README.md LICENSE THIRD_PARTY_NOTICES.md; do install -Dm644 "$SRC/$f" "$PREFIX/share/doc/forge-studio/$f"; done
 command -v update-desktop-database >/dev/null && update-desktop-database -q "$PREFIX/share/applications" 2>/dev/null || true
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -qtf "$PREFIX/share/icons/hicolor" 2>/dev/null || true
 echo "Installed. Launch 'Forge Studio' from your menu, or run: forge-studio"
@@ -137,8 +139,8 @@ BUILDDATE=$(date +%s)
 cat > "$PKG/.PKGINFO" <<EOF
 pkgname = forge-studio
 pkgver = $VERSION-1
-pkgdesc = AI coding agents with live website preview and Android tools
-url = https://localhost
+pkgdesc = Lightweight studio for AI coding agents with an editor, website preview and Android tools
+url = https://github.com/DrBrainlessLol/ForgeStudio
 builddate = $BUILDDATE
 packager = Forge Studio
 size = $SIZE
