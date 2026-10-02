@@ -1,5 +1,5 @@
 Name:           forge-studio
-Version:        1.0.1
+Version:        1.1.0
 Release:        1%{?dist}
 Summary:        Lightweight studio for AI coding agents with an editor, website preview and Android tools
 License:        AGPL-3.0-only

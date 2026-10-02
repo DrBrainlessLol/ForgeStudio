@@ -30,9 +30,9 @@ Switch at the top of the window (or **Ctrl+1 / 2 / 3**). The agent chat comes wi
 - **Agent**: projects and running/finished agent tasks on the left, the chat in the middle (a "What should we build?" home screen with suggestions when it's empty), and Preview / Processes on the right.
 - **Editor**: a familiar IDE layout. Explorer, search and source control on the left, tabbed code editor in the middle, the agent docked on the right.
 - **Android**: a run bar (module, debug/release, device, Run / Restart / Stop / Build), then **Run & Logcat** (screen mirror + app logcat), **Build** output, **Gradle** tasks and toolchain, and **Devices** (emulators, Wi-Fi pairing, port forwarding).
-  - **New app** creates a Compose or Views app with Kotlin DSL, a version catalog, Git and a real Gradle wrapper (AGP 8.7.3 / Gradle 8.10.2 / Kotlin 2.0.21).
+  - **New app** creates a Compose or Views app with Kotlin DSL, a version catalog, Git and a real Gradle wrapper (AGP 9.4.1 with built-in Kotlin, Gradle 9.6, compileSdk = the newest installed platform).
   - Projects without `gradlew` get an **Add Gradle wrapper** button.
-  - Gradle runs on a JDK it supports, picked automatically (e.g. JDK 17 for Gradle 8.10 even if Android Studio's bundled JDK is newer).
+  - Gradle runs on a JDK it supports, picked automatically (e.g. JDK 17 or 21 for older Gradle versions even if Android Studio's bundled JDK is newer).
   - **Live screen**: the phone's display streams as H.264 from its hardware encoder (via your installed scrcpy) and is decoded in the browser, up to 120 fps. Click to tap, drag to swipe; screenshots are the fallback without scrcpy.
   - App-only logcat with level/search filters, crash and ANR detection with **Ask to fix**, and **Ask** to send the visible log to the agent.
   - The Android tab only appears for Android Gradle projects.
@@ -68,10 +68,10 @@ A built-in editor and Git client, no external tools bundled:
 
 ## Install / packaging
 The [one-line installer](#install) is the easiest way. Packages are also attached to every [GitHub release](https://github.com/DrBrainlessLol/ForgeStudio/releases) (built with `packaging/build.sh` into `packaging/dist/`):
-- **Debian / Ubuntu / Deepin:** `sudo apt install ./forge-studio_1.0.1_all.deb`
-- **Arch:** `sudo pacman -U forge-studio-1.0.1-1-any.pkg.tar.zst` (or `makepkg -si` with the `PKGBUILD`)
+- **Debian / Ubuntu / Deepin:** `sudo apt install ./forge-studio_1.1.0_all.deb`
+- **Arch:** `sudo pacman -U forge-studio-1.1.0-1-any.pkg.tar.zst` (or `makepkg -si` with the `PKGBUILD`)
 - **Fedora / openSUSE:** build the RPM with `forge-studio.spec`
-- **Any distro:** extract `forge-studio-1.0.1.tar.gz` and run `sudo ./install.sh` (or `./install.sh --user`)
+- **Any distro:** extract `forge-studio-1.1.0.tar.gz` and run `sudo ./install.sh` (or `./install.sh --user`)
 
 See `packaging/README.md` for details.
 

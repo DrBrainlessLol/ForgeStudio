@@ -1615,10 +1615,10 @@ def start_logcat(project, serial, app_id=None, scope="app"):
 
 # ---------------------------------------------------------------- android: new apps & gradle wrapper
 
-# A known-good toolchain set (AGP 8.7 needs Gradle 8.9+ and JDK 17).
-GRADLE_VERSION = "8.10.2"
-AGP_VERSION = "8.7.3"
-KOTLIN_VERSION = "2.0.21"
+# A known-good toolchain for new apps: AGP 9 with its built-in Kotlin (needs Gradle 9 and JDK 17+).
+GRADLE_VERSION = "9.6.0"
+AGP_VERSION = "9.4.1"
+KOTLIN_VERSION = "2.2.10"  # the Compose compiler plugin version; matches the Kotlin that AGP 9 bundles
 
 
 def java_major(home):
@@ -1730,7 +1730,7 @@ def new_android_app(parent, name, package, template="compose", min_sdk=24):
     plats = android_platforms()
     if not plats:
         raise ValueError("The Android SDK isn't installed yet. Open Settings → Setup and install it (one click).")
-    compile_sdk = 34 if 34 in plats else max(plats)
+    compile_sdk = max(plats)  # newest installed platform
     min_sdk = max(21, min(int(min_sdk or 24), compile_sdk))
     dest = Path(parent or HOME / "AndroidStudioProjects").expanduser().resolve() / re.sub(r"\s+", "", name)
     if dest.exists():
@@ -1786,12 +1786,10 @@ material = {{ group = "com.google.android.material", name = "material", version.
 
 [plugins]
 android-application = {{ id = "com.android.application", version.ref = "agp" }}
-kotlin-android = {{ id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }}
 kotlin-compose = {{ id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }}
 """
     root_build = """plugins {
     alias(libs.plugins.android.application) apply false
-    alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.kotlin.compose) apply false
 }
 """
@@ -1824,7 +1822,6 @@ include(":app")
 """) if compose else ("", "", "    implementation(libs.androidx.appcompat)\n    implementation(libs.material)\n")
     app_build = f"""plugins {{
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
 {compose_bits[0]}}}
 
 android {{
@@ -1848,9 +1845,6 @@ android {{
     compileOptions {{
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }}
-    kotlinOptions {{
-        jvmTarget = "17"
     }}{compose_bits[1]}
 }}
 
