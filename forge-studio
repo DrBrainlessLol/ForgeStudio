@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Start the Forge Studio server (if not already running) and open it in an app window.
+# Start the Forge Studio server (if not already running) and open it in an app window. Linux and macOS.
 set -euo pipefail
-DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# resolve symlinks portably (macOS has no `readlink -f` before 12.3)
+DIR="$(cd "$(dirname "$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$0")")" && pwd)"
 PORT="${FORGE_STUDIO_PORT:-8765}"
 CONF="$HOME/.config/forge-studio"
 LOG="$CONF/server.log"
 mkdir -p "$CONF"
 
 if ! curl -fs -o /dev/null "http://127.0.0.1:$PORT/"; then
-  setsid nohup python3 "$DIR/server.py" >"$LOG" 2>&1 < /dev/null &
+  if command -v setsid >/dev/null; then
+    setsid nohup python3 "$DIR/server.py" >"$LOG" 2>&1 < /dev/null &
+  else  # macOS
+    nohup python3 "$DIR/server.py" >"$LOG" 2>&1 < /dev/null &
+  fi
   for _ in $(seq 50); do curl -fs -o /dev/null "http://127.0.0.1:$PORT/" && break; sleep 0.1; done
 fi
 URL="http://127.0.0.1:$PORT/#token=$(cat "$CONF/token")"
@@ -18,6 +23,15 @@ if [ -n "${1:-}" ] && [ -d "$1" ]; then
 fi
 
 [ "${1:-}" = "--server-only" ] && { echo "$URL"; exit 0; }
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  for app in "Google Chrome" "Microsoft Edge" "Brave Browser" "Chromium"; do
+    if [ -d "/Applications/$app.app" ] || [ -d "$HOME/Applications/$app.app" ]; then
+      exec open -na "$app" --args --app="$URL"
+    fi
+  done
+  exec open "$URL"
+fi
 
 for b in google-chrome chromium chromium-browser microsoft-edge brave-browser; do
   if command -v "$b" >/dev/null; then exec "$b" --app="$URL" --class=ForgeStudio >/dev/null 2>&1; fi

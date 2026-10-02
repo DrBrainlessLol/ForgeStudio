@@ -747,8 +747,56 @@ $("#pinForm").onsubmit = act(async (e) => { e.preventDefault(); finishLogin((awa
 $("#newLocal").onsubmit = act(async (e) => { e.preventDefault(); finishLogin((await authPost("/api/auth/local", { name: $("#newName").value, pin: $("#newPin").value })).login); });
 
 // ============================================================ settings window
+// ---- setup checklist (Settings → Setup): what's installed, one-click installers, download links for the rest
+async function loadSetup() {
+  S.setup = await api("/api/setup/status");
+  renderSetup(); renderSetupHint();
+  return S.setup;
+}
+function renderSetup() {
+  const box = $("#setupList");
+  if (!box || !S.setup) return;
+  $("#setupOs").textContent = `Detected: ${S.setup.os} (${S.setup.arch}).`;
+  const groups = [...new Set(S.setup.items.map((i) => i.group))];
+  box.innerHTML = groups.map((g) => `<h4>${esc(g)}</h4><div class="form-group setup-group">${S.setup.items.filter((i) => i.group === g).map((i) => `
+    <div class="setup-row ${i.ok ? "ok" : "missing"}" data-item="${i.id}">
+      <span class="setup-ic">${ic(i.ok ? "check" : i.optional ? "minus" : "alert")}</span>
+      <div class="grow"><b>${esc(i.name)}</b>${i.optional && !i.ok ? ' <span class="badge">optional</span>' : ""}
+        <div class="dim small-text">${esc(i.ok ? i.detail || "Installed" : i.note || "")}</div>
+        ${!i.ok && i.cmd ? `<div class="copyline setup-cmd"><code class="grow">${esc(i.cmd)}</code><button class="icon-btn" data-copy="${esc(i.cmd)}" title="Copy">${ic("copy")}</button></div>` : ""}
+        <div class="setup-progress dim small-text mono" ${i.running ? "" : "hidden"}>Starting…</div>
+      </div>
+      <div class="setup-acts">
+        ${i.link ? `<a class="btn small plain" href="${esc(i.link)}" target="_blank" rel="noopener" title="Official download page">${ic("external")} ${i.install ? "Website" : "Download"}</a>` : ""}
+        ${i.install ? `<button class="btn small ${i.ok ? "" : "primary"}" data-install="${i.id}" ${i.running ? "disabled" : ""}>${i.running ? "Installing…" : i.ok ? "Update" : "Install"}</button>` : ""}
+      </div>
+    </div>`).join("")}</div>`).join("");
+  box.querySelectorAll("[data-install]").forEach((b) => (b.onclick = act(async () => {
+    b.disabled = true; b.textContent = "Installing…";
+    b.closest(".setup-row").querySelector(".setup-progress").hidden = false;
+    await api("/api/setup/install", { item: b.dataset.install });
+  })));
+  box.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = act(async () => { await navigator.clipboard.writeText(b.dataset.copy); toast("Command copied, paste it in a terminal"); })));
+}
+function renderSetupHint() {
+  const miss = (S.setup?.items || []).filter((i) => i.group === "Android" && !i.ok && !i.optional);
+  $("#setupHint").hidden = !miss.length;
+  $("#setupHintText").textContent = `To build Android apps, install: ${miss.map((i) => i.name).join(", ")}. No Android Studio needed.`;
+}
+$("#btnSetupHint").onclick = () => openSettings("setup");
+$("#setupRecheck").onclick = act(loadSetup);
+$("#setupAndroidAll").onclick = act(async () => {
+  const todo = S.setup.items.filter((i) => i.group === "Android" && !i.ok && i.install && !i.running);
+  if (!todo.length) return toast("The Android tools are already installed");
+  // the SDK installer brings its own JDK when none is found, so one job covers both
+  const ids = todo.map((i) => i.id).filter((id) => !(id === "jdk" && todo.some((t) => t.id === "android-sdk")));
+  for (const id of ids) await api("/api/setup/install", { item: id });
+  toast("Installing the Android tools… progress is shown here and in Processes");
+});
+
 function openSettings(sec = "general") {
   showSection(sec);
+  if (sec === "setup" || !S.setup) act(loadSetup)();
   $("#swatches").innerHTML = ACCENTS.map(([n, c]) => `<button class="swatch" title="${n}" data-accent="${c}" style="background:${c}"></button>`).join("");
   $$("#swatches .swatch").forEach((b) => (b.onclick = () => setPref({ accent: b.dataset.accent })));
   applyAppearance(S.prefs);
@@ -1286,6 +1334,10 @@ function connect() {
         if (ev.project === S.cur && ev.kind === "logcat" && S.mode === "android") setDroidView("run");
         renderProcs(); renderStatusBar(); break;
       case "log":
+        if (ev.kind === "setup") {
+          const pr = S.procs.find((x) => x.id === ev.proc), row = pr && $(`.setup-row[data-item="${pr.meta?.setup}"] .setup-progress`);
+          if (row) { row.hidden = false; row.textContent = ev.line.trim(); }
+        }
         if (ev.kind !== "logcat") {
           (S.procLogs[ev.proc] ??= []).push(ev.line);
           if (S.procLogs[ev.proc].length > 4000) S.procLogs[ev.proc].shift();
@@ -1325,6 +1377,10 @@ function connect() {
         }
         break;
       case "toast": toast(ev.text, ev.err); break;
+      case "setup_done":
+        toast(ev.text, !ev.ok);
+        act(async () => { await loadSetup(); await loadState(); if (S.cur) setupAndroid(); })();
+        break;
       case "projects_changed":
         if (ev.text) toast(ev.text);
         act(async () => {
@@ -1369,7 +1425,7 @@ function setMode(mode, save = true) {
   if (save) store.set("fs:mode", mode);
   if (mode !== "android") store.set("fs:lastMode", mode);
   if (mode === "editor" && typeof codeTabShown === "function") codeTabShown();
-  if (mode === "android" && prev !== "android") { act(refreshDevices)(); loadToolchain(); }
+  if (mode === "android" && prev !== "android") { act(refreshDevices)(); loadToolchain(); act(loadSetup)(); }
   if (prev === "android" && mode !== "android" && M.on) stopMirror();  // don't keep streaming video in the background
   if (prev !== mode) renderChat();
   renderStatusBar();
@@ -1732,4 +1788,9 @@ $("#dlgAdd").onclose = act(async () => {
     try { start = (await api("/api/projects/add", { path: hashProject })).path; await loadState(); } catch (e) { toast(e.message, true); }
   }
   await selectProject(S.projects.some((p) => p.path === start) ? start : null);
+  // first launch for this profile: open the setup checklist if something important is missing
+  if (!store.get(pkey("setupSeen"), false)) {
+    store.set(pkey("setupSeen"), true);
+    act(async () => { const st = await loadSetup(); if (st.items.some((i) => !i.ok && !i.optional)) openSettings("setup"); })();
+  }
 })();

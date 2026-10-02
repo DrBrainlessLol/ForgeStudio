@@ -30,10 +30,10 @@ case "${1:-}" in
 esac
 
 # ---- requirements
-[ "$(uname -s)" = "Linux" ] || die "Forge Studio currently supports Linux only."
+case "$(uname -s)" in Linux|Darwin) ;; *) die "Forge Studio supports Linux and macOS (on Windows, use WSL2)." ;; esac
 command -v curl >/dev/null 2>&1 || die "curl is required."
 command -v tar >/dev/null 2>&1 || die "tar is required."
-command -v python3 >/dev/null 2>&1 || die "Python 3.8 or newer is required (e.g. sudo apt install python3)."
+command -v python3 >/dev/null 2>&1 || die "Python 3.8 or newer is required (Linux: sudo apt install python3 · macOS: xcode-select --install)."
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' || die "Python 3.8 or newer is required (found $(python3 -V 2>&1))."
 
 # ---- which release

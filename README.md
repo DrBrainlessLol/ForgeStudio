@@ -5,15 +5,17 @@ A lightweight desktop studio for AI coding agents. Chat with Claude Code, Codex 
 It uses only the Python standard library and plain HTML/CSS/JS with no build step, and runs as a desktop web app (Chromium app window, installable PWA, optional LAN access).
 
 ## Requirements
-- Python 3.8+ and Chrome / Chromium (Linux; other platforms untested)
-- An agent: [Claude Code](https://docs.claude.com/en/docs/claude-code) (recommended), Codex or another CLI — or just an API key for the built-in engine
-- Optional: Git (Editor's source control), Node.js (dev-server previews), Android SDK + JDK 17+ (Android mode), [scrcpy](https://github.com/Genymobile/scrcpy) (live phone screen)
+- **Linux or macOS** with Python 3.8+ and a browser (Chrome / Chromium / Edge / Brave for an app window). macOS support is new and less tested than Linux; on Windows, use WSL2.
+- Everything else is optional and can be installed from **Settings → Setup**, which opens on first launch: one click per tool, the latest version from the official source, into your home folder (no admin password):
+  - **Agents:** Claude Code (recommended) or Codex. Or skip CLIs and use the built-in engine with an API key.
+  - **Android:** a JDK (Temurin 21) and the Android SDK (command-line tools, platform-tools, build-tools, newest platform). **Android Studio isn't needed.** Gradle needs no install: projects get a checksum-verified Gradle wrapper that downloads it on the first build.
+  - **Extras:** Node.js LTS (dev-server previews), [scrcpy](https://github.com/Genymobile/scrcpy) (live phone screen). Git comes from your system (a copyable command is shown).
 
 ## Install
 ```sh
 curl -fsSL https://raw.githubusercontent.com/DrBrainlessLol/ForgeStudio/main/install.sh | sh
 ```
-Installs the latest release for your user into `~/.local` (no root, nothing else installed, checksum verified), then start **Forge Studio** from your app menu or run `forge-studio`. It opens in the browser you already have. Run the same line again to update; add `-s -- --uninstall` after `sh` to remove it (your data is kept). Prefer a package? See [Install / packaging](#install--packaging).
+Works on Linux and macOS. Installs the latest release for your user into `~/.local` (no root, nothing else installed, checksum verified; on macOS it also adds **Forge Studio.app** to `~/Applications`), then start **Forge Studio** from your app menu or run `forge-studio`. It opens in the browser you already have. Run the same line again to update; add `-s -- --uninstall` after `sh` to remove it (your data is kept). Prefer a package? See [Install / packaging](#install--packaging).
 
 ## Launch
 - Desktop / app menu: **Forge Studio**

@@ -170,6 +170,9 @@
         <button class="icon-btn" id="btnStudio" title="Open in Android Studio"><svg class="ic"><use href="#i-external"/></svg></button>
       </div>
       <div class="warnbox slim" id="devHint" hidden></div>
+      <div class="warnbox slim" id="setupHint" hidden><span id="setupHintText"></span>
+        <button class="btn small primary" id="btnSetupHint">Set up</button>
+      </div>
       <div class="warnbox slim" id="wrapperHint" hidden>
         This project has no Gradle wrapper (<code>gradlew</code>), so it can't be built yet.
         <button class="btn small primary" id="btnWrapper">Add Gradle wrapper</button>
@@ -443,6 +446,7 @@
 <dialog id="dlgSettings" class="settings">
   <div class="settings-win">
     <nav class="settings-nav" id="settingsNav">
+      <button data-sec="setup"><svg class="ic"><use href="#i-package"/></svg> Setup</button>
       <button data-sec="general" class="active"><svg class="ic"><use href="#i-sliders"/></svg> General</button>
       <button data-sec="profile"><svg class="ic"><use href="#i-user"/></svg> Profile &amp; Account</button>
       <button data-sec="agents"><svg class="ic"><use href="#i-plug"/></svg> Agents</button>
@@ -454,6 +458,13 @@
     </nav>
     <div class="settings-body">
       <button class="icon-btn settings-close" id="setClose" title="Close"><svg class="ic"><use href="#i-x"/></svg></button>
+
+      <section data-sec="setup" hidden>
+        <h2>Setup</h2>
+        <p class="dim">Forge Studio uses the tools installed on this computer. Install anything missing with one click: it comes from the official source, at the latest version, into your home folder, with no admin password and no Android Studio needed. <span id="setupOs"></span></p>
+        <div id="setupList"></div>
+        <div class="row end"><button class="btn" id="setupRecheck"><svg class="ic"><use href="#i-refresh"/></svg> Check again</button><button class="btn primary" id="setupAndroidAll"><svg class="ic"><use href="#i-phone"/></svg> Set up everything for Android</button></div>
+      </section>
 
       <section data-sec="general">
         <h2>General</h2>

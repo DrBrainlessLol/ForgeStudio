@@ -95,9 +95,11 @@ for a in "$@"; do case "$a" in
 esac; done
 if [ "$USERMODE" = 0 ] && [ "$(id -u)" != 0 ]; then echo "Run with sudo, or pass --user for a home install." >&2; exit 1; fi
 APP="$PREFIX/lib/forge-studio"
+MACAPP="$HOME/Applications/Forge Studio.app"
 uninstall() {
   rm -rf "$APP" "$PREFIX/bin/forge-studio" "$PREFIX/share/applications/forge-studio.desktop" \
          "$PREFIX/share/doc/forge-studio"
+  [ "$(uname -s)" = Darwin ] && rm -rf "$MACAPP"
   find "$PREFIX/share/icons/hicolor" -name 'forge-studio.*' -delete 2>/dev/null || true
   echo "Forge Studio removed. Your data in ~/.config/forge-studio was kept."
 }
@@ -115,7 +117,36 @@ done
 for f in README.md LICENSE THIRD_PARTY_NOTICES.md; do install -Dm644 "$SRC/$f" "$PREFIX/share/doc/forge-studio/$f"; done
 command -v update-desktop-database >/dev/null && update-desktop-database -q "$PREFIX/share/applications" 2>/dev/null || true
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -qtf "$PREFIX/share/icons/hicolor" 2>/dev/null || true
-echo "Installed. Launch 'Forge Studio' from your menu, or run: forge-studio"
+if [ "$(uname -s)" = Darwin ]; then
+  # a small .app so Forge Studio shows up in Launchpad / Spotlight / the Dock
+  rm -rf "$MACAPP"; mkdir -p "$MACAPP/Contents/MacOS" "$MACAPP/Contents/Resources"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$PREFIX/bin/forge-studio" > "$MACAPP/Contents/MacOS/forge-studio"
+  chmod 755 "$MACAPP/Contents/MacOS/forge-studio"
+  cat > "$MACAPP/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>Forge Studio</string>
+  <key>CFBundleDisplayName</key><string>Forge Studio</string>
+  <key>CFBundleIdentifier</key><string>io.github.drbrainlesslol.forgestudio</string>
+  <key>CFBundleExecutable</key><string>forge-studio</string>
+  <key>CFBundleIconFile</key><string>forge-studio</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSUIElement</key><true/>
+</dict></plist>
+PLIST
+  if command -v iconutil >/dev/null && command -v sips >/dev/null; then
+    ICS="$(mktemp -d)/forge-studio.iconset"; mkdir -p "$ICS"
+    for s in 16 32 128 256 512; do
+      sips -z $s $s "$SRC/icons/512.png" --out "$ICS/icon_${s}x${s}.png" >/dev/null
+      d=$((s * 2)); [ $d -le 512 ] && sips -z $d $d "$SRC/icons/512.png" --out "$ICS/icon_${s}x${s}@2x.png" >/dev/null
+    done
+    iconutil -c icns "$ICS" -o "$MACAPP/Contents/Resources/forge-studio.icns" 2>/dev/null || true
+  fi
+  echo "Installed. Open 'Forge Studio' from Launchpad or ~/Applications, or run: forge-studio"
+else
+  echo "Installed. Launch 'Forge Studio' from your menu, or run: forge-studio"
+fi
 [ "$USERMODE" = 1 ] && case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "Add ~/.local/bin to PATH to use the 'forge-studio' command.";; esac || true
 EOF
 chmod 755 "$SRC/install.sh"

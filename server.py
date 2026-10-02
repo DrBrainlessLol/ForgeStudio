@@ -11,6 +11,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import platform
 import queue
 import re
 import secrets
@@ -170,9 +171,15 @@ class Profile:
 
 # ---------------------------------------------------------------- tooling
 
+IS_MAC = sys.platform == "darwin"
+TOOLS_DIR = CONFIG_DIR / "tools"  # JDK, Node.js… that Forge installs for the user (no root needed)
+# where the Android SDK lives by default (also what Android Studio uses, so both share one SDK)
+DEFAULT_SDK = HOME / "Library" / "Android" / "sdk" if IS_MAC else HOME / "Android" / "Sdk"
+MAC_STUDIO = Path("/Applications/Android Studio.app/Contents")
+
 
 def find_sdk():
-    for p in [os.environ.get("ANDROID_HOME"), os.environ.get("ANDROID_SDK_ROOT"), HOME / "Android" / "Sdk"]:
+    for p in [os.environ.get("ANDROID_HOME"), os.environ.get("ANDROID_SDK_ROOT"), DEFAULT_SDK, HOME / "Android" / "Sdk"]:
         if p and Path(p).is_dir():
             return Path(p)
     return None
@@ -182,7 +189,8 @@ def find_studio():
     custom = CONFIG["settings"].get("studio_path")
     candidates = [custom, shutil.which("studio"), shutil.which("studio.sh"), shutil.which("android-studio"),
                   "/opt/apps/cn.android.studio/files/bin/studio", "/opt/android-studio/bin/studio.sh",
-                  str(HOME / "android-studio" / "bin" / "studio.sh"), "/snap/bin/android-studio"]
+                  str(HOME / "android-studio" / "bin" / "studio.sh"), "/snap/bin/android-studio",
+                  str(MAC_STUDIO / "MacOS" / "studio")]
     for c in candidates:
         if c and Path(c).exists():
             return c
@@ -195,9 +203,11 @@ def find_java_home():
     studio = find_studio()
     if studio:
         root = Path(studio).resolve().parent.parent
-        for sub in ("jbr", "jre"):
+        for sub in ("jbr", "jre", "jbr/Contents/Home"):
             if (root / sub / "bin" / "java").exists():
                 return str(root / sub)
+    if (TOOLS_DIR / "jdk" / "bin" / "java").exists():
+        return str(TOOLS_DIR / "jdk")
     return None
 
 
@@ -209,7 +219,7 @@ def adb_path():
 
 
 def scrcpy_path():
-    for c in (HOME / ".local" / "scrcpy" / "scrcpy", shutil.which("scrcpy")):
+    for c in (HOME / ".local" / "scrcpy" / "scrcpy", shutil.which("scrcpy", path=tool_env()["PATH"])):
         if c and Path(c).exists():
             return str(c)
     return None
@@ -231,7 +241,10 @@ def tool_env():
     jh = find_java_home()
     if jh:
         env["JAVA_HOME"] = jh
-    env["PATH"] = f"{HOME}/.local/node/bin:{HOME}/.local/bin:{env.get('PATH', '')}"
+    extra = [f"{HOME}/.local/node/bin", f"{HOME}/.local/bin"]
+    if IS_MAC:  # apps started from the Dock don't get Homebrew's PATH
+        extra += ["/opt/homebrew/bin", "/usr/local/bin"]
+    env["PATH"] = ":".join(extra + [env.get("PATH", "")])
     env.pop("CLAUDECODE", None)  # let nested claude runs start normally
     return env
 
@@ -1479,7 +1492,7 @@ def scrcpy_server():
     """(server jar path, version) of an installed scrcpy, or (None, None)."""
     exe = scrcpy_path()
     cands = [os.environ.get("SCRCPY_SERVER_PATH"), exe and str(Path(exe).resolve().parent / "scrcpy-server"),
-             "/usr/share/scrcpy/scrcpy-server", "/usr/local/share/scrcpy/scrcpy-server"]
+             "/usr/share/scrcpy/scrcpy-server", "/usr/local/share/scrcpy/scrcpy-server", "/opt/homebrew/share/scrcpy/scrcpy-server"]
     jar = next((c for c in cands if c and Path(c).is_file()), None)
     if not jar or not exe:
         return None, None
@@ -1615,9 +1628,13 @@ def java_major(home):
 
 def jdk_homes():
     """Installed JDKs as {home: major}, from JAVA_HOME, Android Studio's JBR and the usual install folders."""
-    cands = [os.environ.get("JAVA_HOME"), find_java_home()]
+    cands = [os.environ.get("JAVA_HOME"), find_java_home(), str(TOOLS_DIR / "jdk")]
     for pattern in ("/usr/lib/jvm/*", "/opt/*/jbr", "/opt/apps/*/files/jbr", str(HOME / ".jdks/*"),
-                    str(HOME / ".sdkman/candidates/java/*"), str(HOME / "android-studio/jbr")):
+                    str(HOME / ".sdkman/candidates/java/*"), str(HOME / "android-studio/jbr"),
+                    # macOS: system / user JDKs, Homebrew, and Android Studio's bundled JBR
+                    "/Library/Java/JavaVirtualMachines/*/Contents/Home", str(HOME / "Library/Java/JavaVirtualMachines/*/Contents/Home"),
+                    "/opt/homebrew/opt/openjdk*/libexec/openjdk.jdk/Contents/Home", "/usr/local/opt/openjdk*/libexec/openjdk.jdk/Contents/Home",
+                    str(MAC_STUDIO / "jbr/Contents/Home")):
         cands += [str(p) for p in Path("/").glob(pattern.lstrip("/"))]
     out = {}
     for c in cands:
@@ -1672,35 +1689,35 @@ def wrapper_version(project: Path):
 
 
 def add_wrapper(project, version=None, then=None, label=None):
-    """Generate gradlew + gradle/wrapper in a scratch dir (so the Android build isn't configured) and copy it in."""
+    """Add gradlew + gradle/wrapper to a project. Runs as a background step (see setup_wrapper): it downloads the
+    wrapper files (~50 KB, checksum-verified) and falls back to a local Gradle when offline."""
     p = Path(project)
     version = version or wrapper_version(p)
+    return start_proc([sys.executable, "-u", str(APP_DIR / "server.py"), "--setup", "wrapper", str(p), version], str(p),
+                      "gradle", str(p), label or f"gradle wrapper {version}", on_exit=then)
+
+
+def wrapper_from_local_gradle(p: Path, version):
+    """Offline fallback: run a local Gradle's `wrapper` task in a scratch dir (so the Android build isn't configured)."""
     launcher = gradle_launcher(version)
     if not launcher:
-        raise ValueError("No Gradle found to create the wrapper. Install Gradle (e.g. `sdk install gradle`) "
-                         "or open the project once in Android Studio.")
+        raise RuntimeError("Couldn't download the Gradle wrapper and no local Gradle was found. Check your internet connection.")
     scratch = Path(tempfile.mkdtemp(prefix="forge-wrapper-"))
-    (scratch / "settings.gradle").write_text("rootProject.name = 'wrapper'\n")
-
-    def done(code):
-        try:
-            if code == 0:
-                for rel in ("gradlew", "gradlew.bat", "gradle/wrapper/gradle-wrapper.jar", "gradle/wrapper/gradle-wrapper.properties"):
-                    dst = p / rel
-                    if rel.endswith(".properties") and dst.exists():
-                        continue  # keep the project's own distribution settings
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(scratch / rel, dst)
-                os.chmod(p / "gradlew", 0o755)
-        finally:
-            shutil.rmtree(scratch, ignore_errors=True)
-            if then:
-                then(code)
-    m = re.search(r"/gradle-([\d.]+)/bin/gradle$", launcher)
-    env = gradle_env(m.group(1) if m else version)
-    return start_proc([launcher, "wrapper", "--gradle-version", version, "--distribution-type", "bin", "--offline",
-                       "--console=plain", "--no-daemon"], str(scratch), "gradle", str(p), label or f"gradle wrapper {version}",
-                      env=env, on_exit=done)
+    try:
+        (scratch / "settings.gradle").write_text("rootProject.name = 'wrapper'\n")
+        m = re.search(r"/gradle-([\d.]+)/bin/gradle$", launcher)
+        r = subprocess.run([launcher, "wrapper", "--gradle-version", version, "--distribution-type", "bin", "--offline",
+                            "--console=plain", "--no-daemon"], cwd=scratch, env=gradle_env(m.group(1) if m else version))
+        if r.returncode:
+            raise RuntimeError("the local Gradle couldn't create the wrapper")
+        for rel in ("gradlew", "gradlew.bat", "gradle/wrapper/gradle-wrapper.jar", "gradle/wrapper/gradle-wrapper.properties"):
+            dst = p / rel
+            if rel.endswith(".properties") and dst.exists():
+                continue  # keep the project's own distribution settings
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(scratch / rel, dst)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def new_android_app(parent, name, package, template="compose", min_sdk=24):
@@ -1712,7 +1729,7 @@ def new_android_app(parent, name, package, template="compose", min_sdk=24):
         raise ValueError("Package name like com.example.myapp (lowercase, at least two parts)")
     plats = android_platforms()
     if not plats:
-        raise ValueError("No Android SDK platform found. Install one in Android Studio → SDK Manager.")
+        raise ValueError("The Android SDK isn't installed yet. Open Settings → Setup and install it (one click).")
     compile_sdk = 34 if 34 in plats else max(plats)
     min_sdk = max(21, min(int(min_sdk or 24), compile_sdk))
     dest = Path(parent or HOME / "AndroidStudioProjects").expanduser().resolve() / re.sub(r"\s+", "", name)
@@ -2002,6 +2019,301 @@ class MainActivity : AppCompatActivity() {{
     return files
 
 
+# ---------------------------------------------------------------- toolchain setup (first-launch checklist)
+# Everything here installs into the user's home (no root) from official sources, resolving the *latest* version at
+# install time and verifying the published checksum. Each installer runs as `server.py --setup <item>` so its output
+# streams into Processes like any other job.
+
+def cpu_arch():
+    m = platform.machine().lower()
+    return "aarch64" if m in ("arm64", "aarch64") else "x64" if m in ("x86_64", "amd64") else m
+
+
+def http_get(url, timeout=60):
+    return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "ForgeStudio"}), timeout=timeout)
+
+
+def fetch_json(url):
+    with http_get(url) as r:
+        return json.loads(r.read())
+
+
+def fetch_text(url):
+    with http_get(url) as r:
+        return r.read().decode()
+
+
+def download(url, dest, digest=None, algo="sha256"):
+    """Stream a download to `dest` with progress lines; verify the checksum when the publisher provides one."""
+    h, done, last = hashlib.new(algo), 0, 0.0
+    with http_get(url, timeout=120) as r, open(dest, "wb") as out:
+        total = int(r.headers.get("Content-Length") or 0)
+        while chunk := r.read(1 << 16):
+            out.write(chunk)
+            h.update(chunk)
+            done += len(chunk)
+            if time.time() - last > 2:
+                last = time.time()
+                print(f"  {Path(dest).name}: {done >> 20} MB" + (f" of {total >> 20} MB" if total else ""), flush=True)
+    if digest and h.hexdigest().lower() != digest.strip().lower():
+        raise RuntimeError(f"checksum mismatch for {Path(dest).name}; the download may be corrupted, please try again")
+    print(f"  downloaded {Path(dest).name} ({done / 1048576:.1f} MB)" + (", checksum verified" if digest else ""), flush=True)
+
+
+def extract(archive, dest):
+    """Unpack .zip / .tar.* keeping executable bits (zipfile drops them) and symlinks."""
+    import tarfile
+    import zipfile
+    dest.mkdir(parents=True, exist_ok=True)
+    if str(archive).endswith(".zip"):
+        with zipfile.ZipFile(archive) as z:
+            for info in z.infolist():
+                path = z.extract(info, dest)
+                mode = info.external_attr >> 16
+                if mode & 0o777:
+                    os.chmod(path, mode & 0o777)
+    else:
+        with tarfile.open(archive) as t:
+            t.extractall(dest, **({"filter": "tar"} if hasattr(tarfile, "tar_filter") else {}))
+    return dest
+
+
+def replace_dir(src: Path, dest: Path):
+    if dest.exists() or dest.is_symlink():
+        shutil.rmtree(dest) if dest.is_dir() and not dest.is_symlink() else dest.unlink()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dest))
+
+
+def setup_wrapper(project, version):
+    """Gradle wrapper files without installing Gradle: the jar comes from Gradle's own repository at the release tag
+    and must match the official checksum services.gradle.org publishes for that wrapper."""
+    p = Path(project)
+    try:
+        raw = f"https://raw.githubusercontent.com/gradle/gradle/v{version}"
+        with http_get(f"{raw}/gradle/wrapper/gradle-wrapper.jar") as r:
+            jar = r.read()
+        props = fetch_text(f"{raw}/gradle/wrapper/gradle-wrapper.properties")
+        jar_ver = re.search(r"gradle-([\w.\-]+?)-(?:bin|all)\.zip", props).group(1)
+        want = fetch_text(f"https://services.gradle.org/distributions/gradle-{jar_ver}-wrapper.jar.sha256").strip()
+        if hashlib.sha256(jar).hexdigest() != want:
+            raise RuntimeError("the Gradle wrapper jar didn't match its official checksum")
+        scripts = {n: fetch_text(f"{raw}/{n}") for n in ("gradlew", "gradlew.bat")}
+    except Exception as e:  # offline, GitHub blocked, unknown tag…
+        print(f"Downloading the wrapper failed ({e}); trying a local Gradle instead", flush=True)
+        return wrapper_from_local_gradle(p, version)
+    (p / "gradle" / "wrapper").mkdir(parents=True, exist_ok=True)
+    (p / "gradle" / "wrapper" / "gradle-wrapper.jar").write_bytes(jar)
+    props_file = p / "gradle" / "wrapper" / "gradle-wrapper.properties"
+    if not props_file.exists():
+        props_file.write_text("distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\n"
+                              f"distributionUrl=https\\://services.gradle.org/distributions/gradle-{version}-bin.zip\n"
+                              "networkTimeout=10000\nvalidateDistributionUrl=true\n"
+                              "zipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n")
+    for name, text in scripts.items():
+        (p / name).write_text(text)
+    os.chmod(p / "gradlew", 0o755)
+    print(f"Gradle wrapper {version} added (jar checksum verified). Gradle itself downloads on the first build.", flush=True)
+
+
+def setup_jdk():
+    """Latest Eclipse Temurin JDK 21 (LTS) from Adoptium into ~/.config/forge-studio/tools/jdk."""
+    os_name = "mac" if IS_MAC else "linux"
+    rel = fetch_json(f"https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture={cpu_arch()}"
+                     f"&image_type=jdk&os={os_name}&vendor=eclipse")
+    if not rel:
+        raise RuntimeError(f"Adoptium has no JDK 21 build for {os_name}/{cpu_arch()}")
+    pkg = rel[0]["binary"]["package"]
+    print(f"Installing {rel[0]['release_name']} ({os_name} {cpu_arch()})", flush=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / pkg["name"]
+        download(pkg["link"], f, pkg["checksum"])
+        top = next(extract(f, Path(tmp) / "x").iterdir())
+        home = top / "Contents" / "Home" if (top / "Contents" / "Home").is_dir() else top
+        replace_dir(home, TOOLS_DIR / "jdk")
+    print(f"JDK installed in {TOOLS_DIR / 'jdk'}", flush=True)
+
+
+def tools_java():
+    """A JDK 17+ for the Android SDK tools (sdkmanager), newest first."""
+    ok = {h: m for h, m in jdk_homes().items() if m >= 17}
+    return max(ok, key=ok.get) if ok else None
+
+
+def setup_android_sdk():
+    """Google's command-line tools (latest), then the newest stable platform-tools, build-tools and Android platform."""
+    import xml.etree.ElementTree as ET
+    jh = tools_java()
+    if not jh:
+        print("No JDK 17+ found, so installing one first (the SDK tools need Java)", flush=True)
+        setup_jdk()
+        jh = str(TOOLS_DIR / "jdk")
+    sdk = find_sdk() or DEFAULT_SDK
+    sdk.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, JAVA_HOME=jh, ANDROID_HOME=str(sdk), PATH=f"{jh}/bin:{os.environ.get('PATH', '')}")
+    sm = sdk / "cmdline-tools" / "latest" / "bin" / "sdkmanager"
+    if not sm.exists():
+        base = "https://dl.google.com/android/repository/"
+        repo = ET.fromstring(fetch_text(base + "repository2-3.xml"))
+        host = "macosx" if IS_MAC else "linux"
+        archives = [(a.findtext("complete/url"), a.findtext("complete/checksum")) for pk in repo.iter("remotePackage")
+                    if pk.get("path") == "cmdline-tools;latest" for a in pk.iter("archive") if a.findtext("host-os") == host]
+        if IS_MAC and len(archives) > 1:  # separate Apple Silicon / Intel builds
+            want = "arm64" if cpu_arch() == "aarch64" else "x86_64"
+            archives = [a for a in archives if want in a[0]] or archives
+        if not archives:
+            raise RuntimeError(f"Google's repository has no command-line tools for {host}")
+        url, sha1 = archives[0]
+        print(f"Installing Android command-line tools ({url})", flush=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / url
+            download(base + url, f, sha1, algo="sha1")
+            replace_dir(extract(f, Path(tmp) / "x") / "cmdline-tools", sdk / "cmdline-tools" / "latest")
+    run = lambda *a, **kw: subprocess.run([str(sm), f"--sdk_root={sdk}", *a], env=env, text=True, **kw)  # noqa: E731
+    print("Accepting the Android SDK licenses (https://developer.android.com/studio/terms)", flush=True)
+    run("--licenses", input="y\n" * 60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    listing = run("--list", capture_output=True).stdout
+    # older sdkmanager prints "build-tools;36.0.0 | …", newer ones "build-tools/36.0.0   …"; install names use ";"
+    names = {n.replace("/", ";") for n in re.findall(r"^\s*((?:build-tools|platforms)[;/][\w.\-]+)\s", listing, re.M)}
+    tools = sorted((tuple(map(int, n.split(";")[1].split("."))), n) for n in names
+                   if re.fullmatch(r"build-tools;\d+\.\d+\.\d+", n))
+    plats = sorted((int(n.split("-")[1]), n) for n in names if re.fullmatch(r"platforms;android-\d+", n))
+    if not tools or not plats:
+        raise RuntimeError("couldn't read the list of SDK packages from sdkmanager")
+    pkgs = ["platform-tools", tools[-1][1], plats[-1][1]]
+    print("Installing " + ", ".join(pkgs), flush=True)
+    if run(*pkgs).returncode:
+        raise RuntimeError("sdkmanager failed to install the packages")
+    print(f"Android SDK ready in {sdk}", flush=True)
+
+
+def setup_scrcpy():
+    """Latest scrcpy release from GitHub into ~/.local/scrcpy (live phone screen + Smooth window)."""
+    rel = fetch_json("https://api.github.com/repos/Genymobile/scrcpy/releases/latest")
+    prefix = f"scrcpy-{'macos' if IS_MAC else 'linux'}-{'aarch64' if cpu_arch() == 'aarch64' else 'x86_64'}-"
+    asset = next((a for a in rel["assets"] if a["name"].startswith(prefix) and a["name"].endswith(".tar.gz")), None)
+    if not asset:
+        raise RuntimeError(f"scrcpy has no prebuilt release for this computer; install it with your package manager")
+    sums = next((a for a in rel["assets"] if a["name"] == "SHA256SUMS.txt"), None)
+    m = sums and re.search(rf"^([0-9a-f]{{64}})\s+\*?{re.escape(asset['name'])}\s*$", fetch_text(sums["browser_download_url"]), re.M)
+    print(f"Installing scrcpy {rel['tag_name']}", flush=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / asset["name"]
+        download(asset["browser_download_url"], f, m and m.group(1))
+        replace_dir(next(extract(f, Path(tmp) / "x").iterdir()), HOME / ".local" / "scrcpy")
+    print(f"scrcpy installed in {HOME / '.local' / 'scrcpy'}", flush=True)
+
+
+def setup_node():
+    """Latest Node.js LTS from nodejs.org into ~/.local/node (already on Forge's PATH)."""
+    rel = next(r for r in fetch_json("https://nodejs.org/dist/index.json") if r.get("lts"))
+    v, plat = rel["version"], f"{'darwin' if IS_MAC else 'linux'}-{'arm64' if cpu_arch() == 'aarch64' else 'x64'}"
+    name = f"node-{v}-{plat}.tar.gz"
+    m = re.search(rf"^([0-9a-f]{{64}})\s+{re.escape(name)}$", fetch_text(f"https://nodejs.org/dist/{v}/SHASUMS256.txt"), re.M)
+    if not m:
+        raise RuntimeError(f"no Node.js {v} build for {plat}")
+    print(f"Installing Node.js {v} LTS", flush=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / name
+        download(f"https://nodejs.org/dist/{v}/{name}", f, m.group(1))
+        replace_dir(next(extract(f, Path(tmp) / "x").iterdir()), HOME / ".local" / "node")
+    print(f"Node.js installed in {HOME / '.local' / 'node'}", flush=True)
+
+
+def setup_npm_cli(package, binary):
+    """Install an agent CLI from npm into ~/.local (no root), installing Node.js first if needed."""
+    path = tool_env()["PATH"]
+    if not shutil.which("npm", path=path):
+        print("Node.js isn't installed, so installing it first", flush=True)
+        setup_node()
+        path = tool_env()["PATH"]
+    npm = shutil.which("npm", path=path)
+    print(f"Installing {package} (latest)", flush=True)
+    # --allow-scripts lets this one package run its own postinstall on npm versions that block scripts by default
+    r = subprocess.run([npm, "install", "-g", "--prefix", str(HOME / ".local"), f"--allow-scripts={package}", f"{package}@latest"],
+                       env=dict(tool_env(), PATH=path))
+    if r.returncode or not shutil.which(binary, path=path):
+        raise RuntimeError(f"npm couldn't install {package}")
+    print(f"{binary} installed in {HOME / '.local' / 'bin'}", flush=True)
+
+
+SETUP_TASKS = {
+    "jdk": setup_jdk, "android-sdk": setup_android_sdk, "scrcpy": setup_scrcpy, "node": setup_node,
+    "claude": lambda: setup_npm_cli("@anthropic-ai/claude-code", "claude"),
+    "codex": lambda: setup_npm_cli("@openai/codex", "codex"),
+}
+
+
+def run_setup(args):
+    """Entry point for `server.py --setup <item> [args]` (runs in its own process; output goes to Processes)."""
+    try:
+        if args[0] == "wrapper":
+            setup_wrapper(args[1], args[2])
+        else:
+            SETUP_TASKS[args[0]]()
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", flush=True)
+        return 1
+
+
+def setup_status():
+    path = tool_env()["PATH"]
+    which = lambda b: shutil.which(b, path=path)  # noqa: E731
+    sdk = find_sdk()
+    plats = android_platforms()
+    build_tools = sorted(p.name for p in (sdk / "build-tools").iterdir()) if sdk and (sdk / "build-tools").is_dir() else []
+    adb_ok = bool(sdk and (sdk / "platform-tools" / "adb").exists()) or bool(shutil.which("adb", path=path))
+    jdk = tools_java()
+    git_cmd = "xcode-select --install" if IS_MAC else "sudo apt install git    # Fedora: sudo dnf install git · Arch: sudo pacman -S git"
+    items = [
+        {"id": "claude", "group": "Agents", "name": "Claude Code", "ok": bool(which("claude")), "detail": which("claude"),
+         "install": True, "link": "https://docs.claude.com/en/docs/claude-code/setup",
+         "note": "Recommended agent. After installing, run `claude` once in a terminal to sign in."},
+        {"id": "codex", "group": "Agents", "name": "Codex CLI", "ok": bool(which("codex")), "detail": which("codex"),
+         "install": True, "optional": True, "link": "https://github.com/openai/codex",
+         "note": "Optional. No CLI at all? Pick the Built-in agent and add an API key in Models & Keys."},
+        {"id": "git", "group": "Code", "name": "Git", "ok": bool(which("git")), "detail": which("git"), "install": False,
+         "link": "https://git-scm.com/downloads", "cmd": git_cmd, "note": "For Source Control, cloning and the Git status bar."},
+        {"id": "node", "group": "Code", "name": "Node.js (LTS)", "ok": bool(which("node")), "detail": which("node"),
+         "install": True, "optional": True, "link": "https://nodejs.org/en/download",
+         "note": "For npm dev servers in Preview. Installs to ~/.local/node."},
+        {"id": "jdk", "group": "Android", "name": "Java (JDK 17+)", "ok": bool(jdk),
+         "detail": jdk and f"JDK {jdk_homes()[jdk]} · {jdk}", "install": True, "link": "https://adoptium.net/temurin/releases/",
+         "note": "Builds Android apps. Installs Temurin 21 (LTS) to ~/.config/forge-studio/tools/jdk."},
+        {"id": "android-sdk", "group": "Android", "name": "Android SDK", "ok": bool(adb_ok and plats and build_tools),
+         "detail": sdk and f"{sdk}" + (f" · API {max(plats)} · build-tools {build_tools[-1]}" if plats and build_tools else " · incomplete"),
+         "install": True, "link": "https://developer.android.com/studio#command-line-tools-only",
+         "note": f"Command-line tools, platform-tools (adb), build-tools and the newest platform, into {sdk or DEFAULT_SDK}. "
+                 "Android Studio isn't needed. Installing accepts the Android SDK License (developer.android.com/studio/terms)."},
+        {"id": "gradle", "group": "Android", "name": "Gradle", "ok": True, "install": False,
+         "detail": "Nothing to install: each project's Gradle wrapper downloads it on the first build"},
+        {"id": "scrcpy", "group": "Android", "name": "scrcpy (live phone screen)", "ok": bool(scrcpy_server()[1]),
+         "detail": scrcpy_path(), "install": not (sys.platform.startswith("linux") and cpu_arch() == "aarch64"), "optional": True,
+         "link": "https://github.com/Genymobile/scrcpy/releases/latest", "note": "Smooth 120 fps phone screen in Android mode."},
+    ]
+    running = {rec["meta"].get("setup"): rec["id"] for rec in PROCS.values()
+               if rec["kind"] == "setup" and rec["popen"].poll() is None}
+    for it in items:
+        it["running"] = running.get(it["id"])
+    return {"items": items, "os": "macOS" if IS_MAC else "Linux", "arch": cpu_arch()}
+
+
+def setup_install(item):
+    if item not in SETUP_TASKS:
+        raise ValueError("That can't be installed automatically")
+    if any(r["kind"] == "setup" and r["meta"].get("setup") == item and r["popen"].poll() is None for r in PROCS.values()):
+        raise ValueError("Already installing")
+    name = next(i["name"] for i in setup_status()["items"] if i["id"] == item)
+
+    def done(code):
+        _scrcpy_version.clear()
+        emit({"type": "setup_done", "item": item, "ok": code == 0,
+              "text": f"{name} installed" if code == 0 else f"Installing {name} failed. See Processes for the log"})
+    start_proc([sys.executable, "-u", str(APP_DIR / "server.py"), "--setup", item], str(HOME), "setup", "",
+               f"Install {name}", meta={"setup": item}, on_exit=done)
+
+
 # ---------------------------------------------------------------- files, uploads, LAN access
 
 
@@ -2148,6 +2460,12 @@ def code_write(project, rel, content, expect=None, force=False):
 def trash(f: Path):
     """Move to the desktop trash when possible (recoverable); otherwise delete."""
     if shutil.which("gio") and subprocess.run(["gio", "trash", "--", str(f)], capture_output=True, timeout=30).returncode == 0:
+        return True
+    if IS_MAC and (HOME / ".Trash").is_dir():
+        dest = HOME / ".Trash" / f.name
+        if dest.exists():
+            dest = HOME / ".Trash" / f"{f.stem} {time.strftime('%H.%M.%S')}{f.suffix}"
+        shutil.move(str(f), str(dest))
         return True
     if f.is_dir() and not f.is_symlink():
         shutil.rmtree(f)
@@ -2580,6 +2898,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/proc/log":
                 rec = PROCS.get(qs.get("id", [""])[0])
                 return self._send(200, {"lines": list(rec["log"]) if rec else []})
+            if u.path == "/api/setup/status":
+                return self._send(200, setup_status())
             if u.path == "/api/android/sdk":
                 return self._send(200, {"platforms": android_platforms(), "gradle": bool(gradle_launcher()),
                                         "agp": AGP_VERSION, "gradleVersion": GRADLE_VERSION, "kotlin": KOTLIN_VERSION})
@@ -2914,7 +3234,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         if path == "/api/open":
             target = b.get("url") or b.get("path")
-            subprocess.Popen(["xdg-open", target], start_new_session=True, stdout=subprocess.DEVNULL,
+            subprocess.Popen(["open" if IS_MAC else "xdg-open", target], start_new_session=True, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
             return None
         # ---- android
@@ -2924,6 +3244,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("Android Studio not found - set its path in Settings.")
             subprocess.Popen([studio, project], start_new_session=True, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, env=tool_env())
+            return None
+        if path == "/api/setup/install":
+            setup_install(b.get("item"))
             return None
         if path == "/api/android/new":
             return new_android_app(b.get("parent"), b.get("name"), b.get("package"), b.get("template"), b.get("minSdk"))
@@ -3068,6 +3391,8 @@ def shutdown(*_):
 
 
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == "--setup":  # a toolchain installer, started by setup_install / add_wrapper
+        sys.exit(run_setup(sys.argv[2:]))
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)

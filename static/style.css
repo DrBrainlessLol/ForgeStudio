@@ -813,3 +813,16 @@ body:not([data-mode="agent"]) .layout.no-agent .chat, body:not([data-mode="agent
 /* long chats: skip layout/paint for messages that are off screen */
 .messages > .msg, .messages > .tool, .messages > .approval.done, .messages > .meta { content-visibility: auto; contain-intrinsic-size: auto 60px; }
 .more-msgs { align-self: center; color: var(--accent); }
+/* settings → setup checklist */
+.setup-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; }
+.setup-row + .setup-row { border-top: 0.5px solid var(--line); }
+.setup-ic { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none; margin-top: 1px; }
+.setup-ic .ic { width: 13px; height: 13px; }
+.setup-row.ok .setup-ic { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.setup-row.missing .setup-ic { background: var(--warn-soft); color: var(--warn); }
+.setup-row .small-text { overflow-wrap: anywhere; }
+.setup-acts { display: flex; gap: 6px; align-items: center; flex: none; }
+.setup-acts a.btn { text-decoration: none; color: var(--text); }
+.setup-cmd { margin-top: 6px; align-items: center; background: var(--code); border: 0.5px solid var(--line); border-radius: 6px; padding: 2px 2px 2px 8px; }
+.setup-cmd code { font-size: 11.5px; overflow-x: auto; white-space: nowrap; }
+.setup-progress { margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
