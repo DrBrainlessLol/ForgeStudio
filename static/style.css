@@ -793,6 +793,7 @@ body:not([data-mode="agent"]) .composer-bar select { max-width: 100%; flex-shrin
 .mirror-screen canvas { display: block; max-height: 52vh; max-width: 100%; border-radius: 16px; cursor: pointer; user-select: none; touch-action: none; background: #050505; }
 .droid-view .mirror-screen img, .droid-view .mirror-screen canvas { max-height: calc(100vh - 260px); }
 .droid-view .screen-col { max-width: none; }
+.droid-view.live .live-grid { grid-template-columns: minmax(200px, auto) minmax(320px, 1fr); }  /* the log always keeps room */
 /* hide / show the docked agent chat in Editor and Android modes */
 #btnAgent { display: none; }
 body:not([data-mode="agent"]) #btnAgent { display: grid; }
