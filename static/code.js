@@ -12,7 +12,7 @@ const EXT_LANG = {
   html: "xml", htm: "xml", xml: "xml", svg: "xml", vue: "xml", svelte: "xml",
   css: "css", scss: "css", sass: "css", less: "css",
   java: "c", kt: "c", kts: "c", c: "c", h: "c", cpp: "c", cc: "c", hpp: "c", cs: "c",
-  go: "c", rs: "c", swift: "c", dart: "c", scala: "c", gradle: "c",
+  go: "c", rs: "c", swift: "c", dart: "dart", scala: "c", gradle: "c",
   sh: "sh", bash: "sh", zsh: "sh", yml: "sh", yaml: "sh", toml: "sh", ini: "sh", env: "sh", conf: "sh",
   md: "md", markdown: "md",
 };
@@ -575,6 +575,7 @@ const KW = {
   rb: "def end class module if elsif else unless while until for do begin rescue ensure return yield self nil true false and or not then case when require require_relative attr_accessor attr_reader attr_writer puts print new lambda proc",
   php: "abstract and array as break case catch class clone const continue declare default do echo else elseif empty endfor endforeach endif endswitch endwhile enum extends final finally fn for foreach function global if implements include instanceof interface isset list namespace new null or print private protected public return static switch throw trait try unset use var while yield true false",
   lua: "and break do else elseif end false for function goto if in local nil not or repeat return then true until while self",
+  dart: "abstract as assert async await base break case catch class const continue covariant default deferred do dynamic else enum export extends extension external factory false final finally for Function get hide if implements import in interface is late library mixin new null of on operator part required rethrow return sealed set show static super switch sync this throw true try typedef var void when while with yield bool int double num String List Map Set Future Stream Object Never",
 };
 function scan(code, rules) {
   let out = "", i = 0, n = code.length, guard = 0;
@@ -600,6 +601,7 @@ function clikeRules(lang) {
     rules.push(["t-com", /\/\*[\s\S]*?(\*\/|$)/y]);
   rules.push(["t-com", new RegExp(line.replace(/[/*]/g, "\\$&") + ".*", "y")]);
   if (lang === "py") rules.push(["t-str", /[frbu]*("""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$))/y]);
+  if (lang === "dart") rules.push(["t-str", /r?("""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$))/y], ["t-kw", /@\w+/y]);
   if (lang === "js" || lang === "c") rules.push(["t-str", /`(?:\\.|[^`\\])*`/y]);
   rules.push(
     ["t-str", /"(?:\\.|[^"\\])*"/y],

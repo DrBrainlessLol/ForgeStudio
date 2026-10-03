@@ -826,3 +826,10 @@ body:not([data-mode="agent"]) .layout.no-agent .chat, body:not([data-mode="agent
 .setup-cmd { margin-top: 6px; align-items: center; background: var(--code); border: 0.5px solid var(--line); border-radius: 6px; padding: 2px 2px 2px 8px; }
 .setup-cmd code { font-size: 11.5px; overflow-x: auto; white-space: nowrap; }
 .setup-progress { margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Flutter projects reuse the Android workspace; these switch the parts that differ */
+.droidpane:not(.flutter) .fl-only, .droidpane.flutter .droid-only { display: none !important; }
+.chip.on { border-style: solid; border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+#flDebug .chip { height: 26px; padding: 0 10px; font-size: .9em; }
+#nfPlatforms { margin-top: 6px; gap: 14px; }
+#nfPlatforms .check { color: var(--text); }

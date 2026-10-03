@@ -4,7 +4,7 @@
 Standard library only. Serves a web UI on 127.0.0.1 and exposes a token-protected
 JSON API for: per-profile chats with `claude` (history, external model providers),
 website dev previews, and building / running / live-debugging Android projects via
-Gradle + adb. Profiles sign in with Google (optional) or a local name + PIN.
+Gradle + adb and Flutter projects via the flutter tool (hot reload over its daemon protocol). Profiles sign in with Google (optional) or a local name + PIN.
 """
 import base64
 import hashlib
@@ -232,6 +232,33 @@ def emulator_path():
     return shutil.which("emulator")
 
 
+FLUTTER_DIR = HOME / ".local" / "flutter"  # where Setup installs the Flutter SDK
+
+
+def flutter_path():
+    root = os.environ.get("FLUTTER_ROOT")
+    for c in (root and Path(root) / "bin" / "flutter", FLUTTER_DIR / "bin" / "flutter", shutil.which("flutter"),
+              HOME / "flutter" / "bin" / "flutter", HOME / "development" / "flutter" / "bin" / "flutter",
+              HOME / "snap" / "flutter" / "common" / "flutter" / "bin" / "flutter", "/snap/bin/flutter",
+              "/opt/flutter/bin/flutter", "/usr/local/flutter/bin/flutter", "/opt/homebrew/bin/flutter"):
+        if c and Path(c).is_file() and os.access(c, os.X_OK):
+            return str(c)
+    return None
+
+
+def flutter_version():
+    """{'version', 'channel', 'dart', 'root'} of the Flutter SDK, read from its cache (no slow `flutter --version`)."""
+    fl = flutter_path()
+    if not fl:
+        return None
+    root = Path(fl).resolve().parent.parent
+    info = read_json(root / "bin" / "cache" / "flutter.version.json", {})
+    ver = info.get("frameworkVersion") or info.get("flutterVersion")
+    if not ver and (root / "version").is_file():
+        ver = (root / "version").read_text().strip()
+    return {"version": ver, "channel": info.get("channel"), "dart": info.get("dartSdkVersion"), "root": str(root), "path": fl}
+
+
 def tool_env():
     env = dict(os.environ)
     sdk = find_sdk()
@@ -242,6 +269,13 @@ def tool_env():
     if jh:
         env["JAVA_HOME"] = jh
     extra = [f"{HOME}/.local/node/bin", f"{HOME}/.local/bin"]
+    fl = flutter_path()
+    if fl:
+        extra = [str(Path(fl).parent), f"{HOME}/.pub-cache/bin"] + extra
+    if not IS_MAC and not env.get("CHROME_EXECUTABLE") and not shutil.which("google-chrome"):
+        browser = next((b for b in map(shutil.which, ("chromium", "chromium-browser", "microsoft-edge", "brave-browser")) if b), None)
+        if browser:  # Flutter only looks for google-chrome by itself
+            env["CHROME_EXECUTABLE"] = browser
     if IS_MAC:  # apps started from the Dock don't get Homebrew's PATH
         extra += ["/opt/homebrew/bin", "/usr/local/bin"]
     env["PATH"] = ":".join(extra + [env.get("PATH", "")])
@@ -271,6 +305,28 @@ def android_info(path: Path):
                                             "compose": "compose = true" in text or "kotlin.compose" in text})
                 break
     return info
+
+
+def flutter_info(path: Path):
+    """Flutter app/package facts from pubspec.yaml, or None for anything that doesn't depend on the Flutter SDK."""
+    spec = path / "pubspec.yaml"
+    if not spec.is_file():
+        return None
+    text = spec.read_text(errors="ignore")
+    if not re.search(r"^\s+sdk:\s*['\"]?flutter\b", text, re.M):
+        return None  # a plain Dart package
+    app_id = None
+    for f in ("build.gradle.kts", "build.gradle"):
+        bf = path / "android" / "app" / f
+        if bf.is_file():
+            m = re.search(r'applicationId\s*=?\s*["\']([\w.]+)["\']', bf.read_text(errors="ignore"))
+            app_id = m and m.group(1)
+            break
+    field = lambda k: (m := re.search(rf"^{k}:\s*['\"]?([^'\"\n#]+)", text, re.M)) and m.group(1).strip()  # noqa: E731
+    return {"name": field("name"), "version": field("version"), "applicationId": app_id,
+            "platforms": [p for p in FLUTTER_PLATFORMS if (path / p).is_dir()],
+            "app": (path / "lib" / "main.dart").is_file(), "pubGet": (path / ".dart_tool" / "package_config.json").is_file(),
+            "example": (path / "example" / "pubspec.yaml").is_file()}
 
 
 def web_roots(path: Path):
@@ -304,7 +360,9 @@ def describe(path_str):
     p = Path(path_str)
     if not p.is_dir():
         return None
-    return {"path": str(p), "name": p.name, "android": android_info(p), "web": web_roots(p)}
+    flutter = flutter_info(p)
+    return {"path": str(p), "name": p.name, "android": None if flutter else android_info(p), "flutter": flutter,
+            "web": [] if flutter else web_roots(p)}
 
 
 def project_paths():
@@ -315,7 +373,7 @@ def project_paths():
         for child in sorted(root.iterdir()):
             if not child.is_dir() or child.name.startswith(".") or child.name in SKIP_DIRS:
                 continue
-            markers = ["settings.gradle", "settings.gradle.kts", "package.json", "index.html", ".git", "CLAUDE.md"]
+            markers = ["settings.gradle", "settings.gradle.kts", "pubspec.yaml", "package.json", "index.html", ".git", "CLAUDE.md"]
             if any((child / m).exists() for m in markers):
                 found.append(str(child))
     paths = []
@@ -352,24 +410,32 @@ def emit(event, profile=None):
 PROCS = {}
 
 
-def start_proc(cmd, cwd, kind, project, label, shell=False, env=None, on_line=None, on_exit=None, meta=None):
+def start_proc(cmd, cwd, kind, project, label, shell=False, env=None, on_line=None, on_exit=None, meta=None,
+               stdin=False, transform=None):
+    """Run a background job whose output streams to the UI. `transform(line)` may rewrite each raw line into zero or
+    more display lines (e.g. flutter's JSON daemon protocol); `stdin=True` keeps a pipe open to talk to the job."""
     pid = uuid.uuid4().hex[:10]
     popen = subprocess.Popen(cmd, cwd=cwd, shell=shell, env=env or tool_env(), stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, bufsize=1,
-                             errors="replace", start_new_session=True)
+                             stderr=subprocess.STDOUT, stdin=subprocess.PIPE if stdin else subprocess.DEVNULL, text=True,
+                             bufsize=1, errors="replace", start_new_session=True)
     rec = {"id": pid, "kind": kind, "project": project, "label": label, "popen": popen,
            "log": deque(maxlen=5000), "started": time.time(), "code": None, "meta": meta or {}}
     PROCS[pid] = rec
     emit({"type": "proc_start", "proc": pid, "kind": kind, "project": project, "label": label, "meta": rec["meta"]})
 
     def pump():
-        for line in popen.stdout:
-            line = line.rstrip("\n")
-            rec["log"].append(line)
-            emit({"type": "log", "proc": pid, "kind": kind, "project": project, "line": line})
+        for raw in popen.stdout:
+            raw = raw.rstrip("\n")
+            try:
+                lines = transform(raw) if transform else [raw]
+            except Exception:
+                lines = [raw]
+            for line in lines:
+                rec["log"].append(line)
+                emit({"type": "log", "proc": pid, "kind": kind, "project": project, "line": line})
             if on_line:
                 try:
-                    on_line(line)
+                    on_line(raw)
                 except Exception:
                     pass
         rec["code"] = popen.wait()
@@ -2013,6 +2079,293 @@ class MainActivity : AppCompatActivity() {{
     return files
 
 
+# ---------------------------------------------------------------- flutter
+# `flutter run --machine` speaks the Flutter daemon protocol (one JSON message per line) on stdin/stdout, the same way
+# IDEs drive it. We translate its events into readable log lines and send it hot reload / restart / stop commands.
+
+FLUTTER_PLATFORMS = ("android", "ios", "web", "linux", "macos", "windows")
+FLUTTER_RUNS = {}  # project -> run state (see flutter_run)
+FLUTTER_EXTS = {"debugPaint": "ext.flutter.debugPaint", "performanceOverlay": "ext.flutter.showPerformanceOverlay",
+                "debugBanner": "ext.flutter.debugAllowBanner", "inspector": "ext.flutter.inspector.show",
+                "slowAnimations": "ext.flutter.timeDilation"}
+
+
+def need_flutter():
+    fl = flutter_path()
+    if not fl:
+        raise ValueError("The Flutter SDK isn't installed yet. Open Settings → Setup and install it (one click).")
+    return fl
+
+
+def flutter_env(project):
+    """Flutter builds Android apps with Gradle, so give it a JDK that the project's Gradle version supports."""
+    android = Path(project) / "android"
+    return gradle_env(wrapper_version(android)) if android.is_dir() else tool_env()
+
+
+def flutter_devices():
+    fl = flutter_path()
+    if not fl:
+        return {"devices": [], "error": None, "installed": False}
+    try:
+        r = subprocess.run([fl, "devices", "--machine"], capture_output=True, text=True, timeout=120, env=tool_env())
+    except subprocess.TimeoutExpired:
+        return {"devices": [], "error": "`flutter devices` timed out", "installed": True}
+    m = re.search(r"^\[", r.stdout, re.M)  # a first-run banner may come before the JSON
+    try:
+        found = json.loads(r.stdout[m.start():]) if m else []
+    except ValueError:
+        found = []
+    if not m and r.returncode:
+        return {"devices": [], "error": (r.stderr or r.stdout).strip()[-400:], "installed": True}
+    devices = [{"id": d["id"], "name": d.get("name") or d["id"], "platform": d.get("targetPlatform", ""),
+                "emulator": bool(d.get("emulator")), "sdk": d.get("sdk"), "supported": d.get("isSupported", True)}
+               for d in found]
+    if not any(d["id"] == "web-server" for d in devices):  # hidden by `flutter devices`, but always available
+        devices.append({"id": "web-server", "name": "Web server (opens in Preview)", "platform": "web-javascript",
+                        "emulator": False, "sdk": "Flutter web", "supported": True})
+    return {"devices": devices, "error": None, "installed": True}
+
+
+def flutter_event(st, raw):
+    """Turn one line of `flutter run --machine` output into display lines (and act on the events we care about)."""
+    s = raw.strip()
+    if not (s.startswith("[{") and s.endswith("}]")):
+        return [raw]
+    try:
+        msg = json.loads(s)[0]
+    except ValueError:
+        return [raw]
+    ev, p, project = msg.get("event"), msg.get("params") or {}, st["project"]
+    if not ev and "id" in msg:  # the reply to one of our commands
+        what = st["pending"].pop(msg["id"], "command")
+        res, err = msg.get("result"), msg.get("error")
+        if isinstance(res, dict) and res.get("code") not in (0, None):
+            err = res.get("message") or f"{what} failed"
+        if err:
+            emit({"type": "flutter_state", "project": project, "running": True, "event": "error", "text": f"{what} failed"})
+            return [f"✗ {what} failed: {err}" if isinstance(err, str) else f"✗ {what} failed: {json.dumps(err)}"]
+        if what in ("Hot reload", "Hot restart"):
+            emit({"type": "flutter_state", "project": project, "running": True, "event": "reloaded", "text": f"{what} done"})
+            return [f"↻ {what} done" + (f" — {res['message']}" if isinstance(res, dict) and res.get("message") else "")]
+        return []
+    if ev == "app.start":
+        st["app"] = p.get("appId")
+        return [f"Launching {Path(p.get('directory') or project).name} on {p.get('deviceId')} ({p.get('mode', 'debug')} mode)…"]
+    if ev == "app.progress":
+        return [p["message"]] if p.get("message") and not p.get("finished") else []
+    if ev == "app.log":
+        return (p.get("log") or "").splitlines() + (p.get("stackTrace") or "").splitlines()
+    if ev == "daemon.logMessage":
+        return [] if p.get("level") == "trace" else (p.get("message") or "").splitlines()
+    if ev == "app.debugPort":
+        st["vm"] = p.get("wsUri")
+        return [f"Dart VM service: {p.get('wsUri')}"]
+    if ev == "app.started":
+        st["started"] = True
+        emit({"type": "flutter_state", "project": project, "running": True, "event": "started", "device": st["device"]})
+        return ["✓ App running. Hot reload with ⚡ or by saving a .dart file; hot restart with ⟳."]
+    if ev == "app.webLaunchUrl":
+        st["url"] = p.get("url")
+        if st["url"]:
+            emit({"type": "preview_url", "project": project, "url": st["url"], "flutter": True})
+        return [f"Web app: {st['url']}"]
+    if ev == "app.stop":
+        st["started"] = False
+        return ["Application stopped." + (f" {p['error']}" if p.get("error") else "")]
+    if ev in ("daemon.connected", "app.dtd"):
+        return []
+    if p.get("uri"):
+        return [f"{ev}: {p['uri']}"]
+    return []
+
+
+def flutter_send(project, method, params=None, what=None):
+    st = FLUTTER_RUNS.get(project)
+    if not st or st["rec"]["popen"].poll() is not None:
+        raise ValueError("The app isn't running — press Run first.")
+    if not st["app"]:
+        raise ValueError("The app is still starting — try again in a moment.")
+    with st["lock"]:
+        st["seq"] += 1
+        st["pending"][st["seq"]] = what or method
+        st["rec"]["popen"].stdin.write(json.dumps([{"id": st["seq"], "method": method,
+                                                    "params": {"appId": st["app"], **(params or {})}}]) + "\n")
+        st["rec"]["popen"].stdin.flush()
+
+
+def flutter_reload(project, full=False, reason="manual"):
+    if not FLUTTER_RUNS.get(project, {}).get("started"):
+        raise ValueError("The app is still starting — try again in a moment.")
+    flutter_send(project, "app.restart", {"fullRestart": bool(full), "pause": False, "reason": reason},
+                 "Hot restart" if full else "Hot reload")
+
+
+def flutter_watch(st):
+    """Hot reload when a .dart file under lib/ changes — saved in the editor or written by the agent."""
+    lib = Path(st["project"]) / "lib"
+    prev = snapshot(lib)
+    while st["rec"]["popen"].poll() is None:
+        time.sleep(0.7)
+        cur = snapshot(lib)
+        if cur == prev:
+            continue
+        changed = [f for f in set(cur) | set(prev) if cur.get(f) != prev.get(f)]
+        prev = cur
+        if st["auto"] and st["started"] and any(f.endswith(".dart") for f in changed):
+            try:
+                flutter_reload(st["project"], reason="save")
+            except Exception:
+                pass
+
+
+def flutter_run(project, device, mode="debug", auto=True):
+    fl = need_flutter()
+    if running("flutter", project):
+        raise ValueError("The app is already running — use hot reload or restart, or stop it first.")
+    if not device:
+        raise ValueError("Pick a device first")
+    mode = mode if mode in ("debug", "profile", "release") else "debug"
+    cmd = [fl, "run", "--machine", "-d", device, f"--{mode}"]
+    if device == "web-server":
+        cmd += ["--web-hostname", "127.0.0.1", "--web-port", str(free_port())]
+    st = {"project": project, "device": device, "app": None, "started": False, "seq": 0, "pending": {}, "auto": bool(auto),
+          "vm": None, "url": None, "lock": threading.Lock()}
+
+    def done(code):
+        if FLUTTER_RUNS.get(project) is st:
+            FLUTTER_RUNS.pop(project, None)
+        emit({"type": "flutter_state", "project": project, "running": False, "code": code})
+    st["rec"] = start_proc(cmd, project, "flutter", project, f"flutter run · {device}", env=flutter_env(project), stdin=True,
+                           transform=lambda line: flutter_event(st, line), on_exit=done, meta={"device": device, "mode": mode})
+    FLUTTER_RUNS[project] = st
+    if (Path(project) / "lib").is_dir():
+        threading.Thread(target=flutter_watch, args=(st,), daemon=True).start()
+
+
+def flutter_stop(project):
+    st = FLUTTER_RUNS.get(project)
+    rec = st and st["rec"]
+    if not rec or rec["popen"].poll() is not None:
+        return
+    try:
+        if st["app"]:
+            flutter_send(project, "app.stop", what="Stop")
+            threading.Timer(6, lambda: kill_proc(rec["id"])).start()  # in case the device doesn't answer
+            return
+    except Exception:
+        pass
+    kill_proc(rec["id"])
+
+
+def flutter_ext(project, name, enabled):
+    """Toggle a Flutter debug service extension (debug paint, performance overlay, …) in the running app."""
+    if name not in FLUTTER_EXTS:
+        raise ValueError("unknown debug option")
+    if FLUTTER_RUNS.get(project, {}).get("device") == "web-server":
+        raise ValueError("Debug tools need a device with a Dart VM service (Android, desktop or Chrome), not the Web server device.")
+    params = {"timeDilation": "5.0" if enabled else "1.0"} if name == "slowAnimations" else {"enabled": "true" if enabled else "false"}
+    flutter_send(project, "app.callServiceExtension", {"methodName": FLUTTER_EXTS[name], "params": params}, name)
+
+
+def flutter_task(project, args):
+    """`flutter …` or `dart …` in the project, shown in the Build output."""
+    fl = need_flutter()
+    argv = shlex.split(args or "")
+    tool = fl
+    if argv and argv[0] in ("flutter", "dart"):
+        tool = fl if argv[0] == "flutter" else str(Path(fl).parent / "dart")
+        argv = argv[1:]
+    if not argv:
+        raise ValueError("Type a flutter command, e.g. pub get or build apk")
+    if running("flutter-task", project):
+        raise ValueError("A Flutter task is already running for this project.")
+    name = "dart" if tool != fl else "flutter"
+    then = None
+    if argv[0] in ("create", "pub"):  # new platform folders / dependencies change what the UI shows
+        then = lambda code: code == 0 and emit({"type": "projects_changed"})  # noqa: E731
+    return start_proc([tool, *argv], project, "flutter-task", project, f"{name} {' '.join(argv)}", env=flutter_env(project),
+                      on_exit=then)
+
+
+_devtools = {}
+
+
+def flutter_devtools(project):
+    """URL of Dart DevTools connected to the running app (starts one DevTools server per session)."""
+    st = FLUTTER_RUNS.get(project)
+    if st and st["device"] == "web-server":
+        raise ValueError("DevTools needs a device with a Dart VM service (Android, desktop or Chrome), not the Web server device.")
+    if not st or not st.get("vm"):
+        raise ValueError("Run the app in debug or profile mode first — DevTools connects to it.")
+    rec = _devtools.get("rec")
+    if not rec or rec["popen"].poll() is not None:
+        _devtools.clear()
+        ready = threading.Event()
+
+        def seen(line):
+            m = re.search(r"(https?://[\w.:\[\]-]+/?)", line)
+            if m and "DevTools" in line:
+                _devtools["url"] = m.group(1).rstrip("/.")
+                ready.set()
+        _devtools["rec"] = start_proc([str(Path(need_flutter()).parent / "dart"), "devtools", "--no-launch-browser"], str(HOME),
+                                      "devtools", "", "Dart DevTools", on_line=seen)
+        if not ready.wait(60):
+            raise ValueError("DevTools didn't start — see Processes for its log")
+    return {"url": f"{_devtools['url']}/?uri={urllib.parse.quote(st['vm'], safe='')}"}
+
+
+def new_flutter_app(parent, name, org, template="app", platforms=None):
+    fl = need_flutter()
+    name = (name or "").strip()
+    if not re.fullmatch(r"[A-Za-z][\w -]{0,60}", name):
+        raise ValueError("App name: letters, numbers, spaces, - or _ (start with a letter)")
+    pname = re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", name.lower())).strip("_")
+    org = (org or "com.example").strip()
+    if not re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+", org):
+        raise ValueError("Organization like com.example (lowercase, at least two parts)")
+    plats = [p for p in FLUTTER_PLATFORMS if p in (platforms or [])] or ["android", "ios", "web"]
+    dest = Path(parent or HOME / "projects").expanduser().resolve() / pname
+    if dest.exists():
+        raise ValueError(f"{dest} already exists")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [fl, "create", "--org", org, "--project-name", pname, "--platforms", ",".join(plats), "--no-pub"]
+    if template == "empty":
+        cmd.append("--empty")
+    cmd.append(str(dest))
+
+    def ready(code):
+        if code or not (dest / "pubspec.yaml").exists():
+            return emit({"type": "toast", "text": f"Creating {name} failed — see Processes for the log", "err": True})
+        flutter_label(dest, pname, name)
+        if shutil.which("git"):
+            git(dest, "init", "-b", "main", check=False)
+        CONFIG["projects"].insert(0, str(dest))
+        CONFIG["hidden"] = [h for h in CONFIG["hidden"] if h != str(dest)]
+        save_config()
+        emit({"type": "projects_changed", "select": str(dest), "text": f"{name} is ready — fetching packages, then press Run"})
+        flutter_task(str(dest), "pub get")
+    start_proc(cmd, str(dest.parent), "flutter-task", str(dest), f"new Flutter app {name}", env=tool_env(), on_exit=ready)
+    return {"path": str(dest), "platforms": plats}
+
+
+def flutter_label(dest: Path, pname, label):
+    """`flutter create` names the app after the package (my_app); show the real name on the home screen / tab."""
+    if label == pname:
+        return
+    edits = {"android/app/src/main/AndroidManifest.xml": (f'android:label="{pname}"', f'android:label="{label}"'),
+             "web/index.html": (f"<title>{pname}</title>", f"<title>{label}</title>"),
+             "web/manifest.json": (f'"name": "{pname}"', f'"name": "{label}"'),
+             "linux/runner/my_application.cc": (f'"{pname}"', f'"{label}"')}
+    for rel, (old, new) in edits.items():
+        f = dest / rel
+        if f.is_file():
+            f.write_text(f.read_text().replace(old, new))
+    plist = dest / "ios" / "Runner" / "Info.plist"
+    if plist.is_file():
+        plist.write_text(re.sub(r"(<key>CFBundleDisplayName</key>\s*<string>)[^<]*", lambda m: m.group(1) + label, plist.read_text()))
+
+
 # ---------------------------------------------------------------- toolchain setup (first-launch checklist)
 # Everything here installs into the user's home (no root) from official sources, resolving the *latest* version at
 # install time and verifying the published checksum. Each installer runs as `server.py --setup <item>` so its output
@@ -2231,8 +2584,52 @@ def setup_npm_cli(package, binary):
     print(f"{binary} installed in {HOME / '.local' / 'bin'}", flush=True)
 
 
+def setup_flutter():
+    """Latest stable Flutter SDK into ~/.local/flutter, from Google's release index (checksum-verified), with `flutter`
+    and `dart` linked into ~/.local/bin. Linux on ARM has no prebuilt archive, so it's a clone of the stable branch."""
+    git_bin = shutil.which("git", path=tool_env()["PATH"])
+    if not git_bin:
+        raise RuntimeError("Flutter needs Git. Install Git first (see the Git row above), then try again.")
+    staging = Path(tempfile.mkdtemp(prefix=".flutter-install-", dir=FLUTTER_DIR.parent))  # same disk: no 2 GB copy
+    try:
+        if not IS_MAC and cpu_arch() == "aarch64":
+            print("No prebuilt Flutter for Linux on ARM; cloning the stable branch from GitHub", flush=True)
+            if subprocess.run([git_bin, "clone", "-b", "stable", "https://github.com/flutter/flutter.git", str(staging / "flutter")]).returncode:
+                raise RuntimeError("git clone failed")
+        else:
+            index = fetch_json(f"https://storage.googleapis.com/flutter_infra_release/releases/releases_{'macos' if IS_MAC else 'linux'}.json")
+            want, arch = index["current_release"]["stable"], "arm64" if cpu_arch() == "aarch64" else "x64"
+            rel = next((r for r in index["releases"] if r["hash"] == want and r.get("dart_sdk_arch", "x64") == arch), None)
+            if not rel:
+                raise RuntimeError(f"no stable Flutter build for {arch}")
+            print(f"Installing Flutter {rel['version']} (stable, {arch}); about 1 GB, this takes a while", flush=True)
+            f = staging / Path(rel["archive"]).name
+            download(f"{index['base_url']}/{rel['archive']}", f, rel["sha256"])
+            print("  unpacking…", flush=True)
+            if IS_MAC:  # the macOS zip holds framework symlinks, which Python's zipfile can't restore
+                subprocess.run(["ditto", "-x", "-k", str(f), str(staging)], check=True)
+            else:
+                extract(f, staging)
+            f.unlink()
+        replace_dir(staging / "flutter", FLUTTER_DIR)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    bin_dir = HOME / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for tool in ("flutter", "dart"):  # so terminals and agents find them too (the scripts follow their symlinks)
+        link = bin_dir / tool
+        if not link.exists() or (link.is_symlink() and str(FLUTTER_DIR) in os.readlink(link)):
+            link.unlink(missing_ok=True)
+            link.symlink_to(FLUTTER_DIR / "bin" / tool)
+    print("First run: Flutter sets up its own tool (a minute or two)…", flush=True)
+    env = tool_env()
+    env["PATH"] = f"{FLUTTER_DIR / 'bin'}:{env['PATH']}"
+    subprocess.run([str(FLUTTER_DIR / "bin" / "flutter"), "--version"], env=env)
+    print(f"Flutter installed in {FLUTTER_DIR} (also on your PATH as ~/.local/bin/flutter)", flush=True)
+
+
 SETUP_TASKS = {
-    "jdk": setup_jdk, "android-sdk": setup_android_sdk, "scrcpy": setup_scrcpy, "node": setup_node,
+    "jdk": setup_jdk, "android-sdk": setup_android_sdk, "scrcpy": setup_scrcpy, "node": setup_node, "flutter": setup_flutter,
     "claude": lambda: setup_npm_cli("@anthropic-ai/claude-code", "claude"),
     "codex": lambda: setup_npm_cli("@openai/codex", "codex"),
 }
@@ -2286,6 +2683,27 @@ def setup_status():
          "detail": scrcpy_path(), "install": not (sys.platform.startswith("linux") and cpu_arch() == "aarch64"), "optional": True,
          "link": "https://github.com/Genymobile/scrcpy/releases/latest", "note": "Smooth 120 fps phone screen in Android mode."},
     ]
+    fv = flutter_version()
+    items.append({"id": "flutter", "group": "Flutter", "name": "Flutter SDK", "ok": bool(fv), "install": True,
+                  "detail": fv and f"Flutter {fv['version'] or '?'}" + (f" ({fv['channel']})" if fv.get("channel") else "") + f" · {fv['root']}",
+                  "link": "https://docs.flutter.dev/get-started/install",
+                  "note": f"Latest stable release into {FLUTTER_DIR} (a 1.5 GB download, about 2.5 GB on disk). Android builds also use the JDK and "
+                          "Android SDK above. Needs Git."})
+    if not IS_MAC:
+        have = all(which(b) for b in ("clang++", "cmake", "ninja", "pkg-config"))
+        gtk = have and subprocess.run(["pkg-config", "--exists", "gtk+-3.0"], env=tool_env()).returncode == 0
+        items.append({"id": "flutter-linux", "group": "Flutter", "name": "Linux desktop toolchain", "ok": bool(gtk),
+                      "install": False, "optional": True, "link": "https://docs.flutter.dev/platform-integration/linux/setup",
+                      "detail": "clang, CMake, Ninja, GTK 3" if gtk else None,
+                      "cmd": "sudo apt install clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev    "
+                             "# Fedora: sudo dnf install clang cmake ninja-build gtk3-devel · Arch: sudo pacman -S clang cmake ninja gtk3",
+                      "note": "Only to run Flutter apps as Linux desktop apps."})
+    chrome = tool_env().get("CHROME_EXECUTABLE") or which("google-chrome") or which("google-chrome-stable")
+    if IS_MAC:
+        chrome = chrome or next((a for a in ("/Applications/Google Chrome.app", "/Applications/Chromium.app") if Path(a).exists()), None)
+    items.append({"id": "flutter-chrome", "group": "Flutter", "name": "Chrome / Chromium", "ok": bool(chrome), "install": False,
+                  "optional": True, "detail": chrome, "link": "https://www.google.com/chrome/",
+                  "note": "To run Flutter web apps in a browser window. Without it, pick the “Web server” device: it opens in Preview."})
     running = {rec["meta"].get("setup"): rec["id"] for rec in PROCS.values()
                if rec["kind"] == "setup" and rec["popen"].poll() is None}
     for it in items:
@@ -2899,6 +3317,8 @@ class Handler(BaseHTTPRequestHandler):
                                         "agp": AGP_VERSION, "gradleVersion": GRADLE_VERSION, "kotlin": KOTLIN_VERSION})
             if u.path == "/api/android/devices":
                 return self._send(200, list_devices())
+            if u.path == "/api/flutter/devices":
+                return self._send(200, flutter_devices())
             if u.path == "/api/android/stream":
                 return self.screen_stream(qs.get("serial", [None])[0] or None, int(qs.get("fps", ["120"])[0]))
             if u.path == "/api/android/screenshot":
@@ -2949,7 +3369,7 @@ class Handler(BaseHTTPRequestHandler):
             "tools": {"claude": bool(shutil.which("claude", path=env_path)), "adb": adb_path(),
                       "studio": find_studio(), "java": find_java_home(), "emulator": emulator_path(),
                       "scrcpy": scrcpy_path(), "stream": bool(scrcpy_server()[1]), "node": shutil.which("node", path=env_path),
-                      "sdk": str(find_sdk() or ""), "git": shutil.which("git", path=env_path)},
+                      "sdk": str(find_sdk() or ""), "git": shutil.which("git", path=env_path), "flutter": flutter_version()},
             "previews": {k: {"url": v["url"], "dir": v["dir"]} for k, v in PREVIEWS.items()},
             "running": [cid for cid, r in RUNS.items() if r.running() and cid in prof.data["chats"]],
             "agents": list_agents(),
@@ -2960,6 +3380,8 @@ class Handler(BaseHTTPRequestHandler):
             "providers": providers,
             "procs": [{"id": r["id"], "kind": r["kind"], "project": r["project"], "label": r["label"],
                        "running": r["popen"].poll() is None, "meta": r["meta"]} for r in PROCS.values()],
+            "flutter": {k: {"started": v["started"], "device": v["device"], "auto": v["auto"], "url": v["url"]}
+                        for k, v in FLUTTER_RUNS.items()},
             "settings": {"studio_path": CONFIG["settings"].get("studio_path"),
                          "hideTest": bool(CONFIG["settings"].get("hideTest")),
                          "google": {"clientId": (CONFIG["settings"].get("google") or {}).get("clientId", "")}},
@@ -3311,6 +3733,30 @@ class Handler(BaseHTTPRequestHandler):
             if r.returncode or "Exception" in err:
                 raise ValueError(err.strip()[:300] or "input failed")
             return None
+        # ---- flutter
+        if path == "/api/flutter/new":
+            return new_flutter_app(b.get("parent"), b.get("name"), b.get("org"), b.get("template"), b.get("platforms"))
+        if path == "/api/flutter/run":
+            flutter_run(project, b.get("device"), b.get("mode", "debug"), b.get("auto", True))
+            return None
+        if path == "/api/flutter/reload":
+            flutter_reload(project, b.get("full"))
+            return None
+        if path == "/api/flutter/stop":
+            flutter_stop(project)
+            return None
+        if path == "/api/flutter/auto":
+            if project in FLUTTER_RUNS:
+                FLUTTER_RUNS[project]["auto"] = bool(b.get("on"))
+            return None
+        if path == "/api/flutter/ext":
+            flutter_ext(project, b.get("name"), b.get("enabled"))
+            return None
+        if path == "/api/flutter/task":
+            flutter_task(project, b.get("args"))
+            return None
+        if path == "/api/flutter/devtools":
+            return flutter_devtools(project)
         if path == "/api/android/scrcpy":
             sc = scrcpy_path()
             if not sc:

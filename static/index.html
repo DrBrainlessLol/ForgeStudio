@@ -74,7 +74,7 @@
   <nav class="modes" id="modes">
     <button data-mode="agent" title="Agent — chat with the agent, previews and tasks (Ctrl+1)"><svg class="ic"><use href="#i-bot"/></svg> Agent</button>
     <button data-mode="editor" title="Editor — files, code, search and Git with the agent beside you (Ctrl+2)"><svg class="ic"><use href="#i-code"/></svg> Editor</button>
-    <button data-mode="android" title="Android — build, run and debug apps with Gradle (Ctrl+3)"><svg class="ic"><use href="#i-phone"/></svg> Android</button>
+    <button data-mode="android" title="Android — build, run and debug apps with Gradle (Ctrl+3)"><svg class="ic"><use href="#i-phone"/></svg> <span id="modeDroidLabel">Android</span></button>
   </nav>
   <div class="spacer"></div>
   <button class="tb-btn" id="btnAgent" title="Show / hide the agent chat (Ctrl+J)"><svg class="ic flip"><use href="#i-sidebar"/></svg></button>
@@ -154,7 +154,7 @@
     <!-- ANDROID MODE -->
     <section class="droidpane" id="droidPane" hidden>
       <div class="run-bar">
-        <select id="moduleSel" title="App module"></select>
+        <select id="moduleSel" class="droid-only" title="App module"></select>
         <select id="variantSel" title="Build variant"><option value="Debug">debug</option><option value="Release">release</option></select>
         <span class="run-sep"></span>
         <svg class="ic dim"><use href="#i-phone"/></svg>
@@ -162,11 +162,13 @@
         <button class="icon-btn" id="btnDevRefresh" title="Refresh devices"><svg class="ic"><use href="#i-refresh"/></svg></button>
         <span class="run-sep"></span>
         <button class="btn primary run" id="btnRun" title="Build, install and launch (logcat starts automatically)"><svg class="ic"><use href="#i-play"/></svg> Run</button>
+        <button class="icon-btn fl-only" id="btnHotReload" title="Hot reload (keeps app state)"><svg class="ic"><use href="#i-zap"/></svg></button>
         <button class="icon-btn" id="btnRestart" title="Restart the app without rebuilding"><svg class="ic"><use href="#i-restart"/></svg></button>
         <button class="icon-btn" id="btnStopApp" title="Stop the app"><svg class="ic"><use href="#i-stop"/></svg></button>
         <button class="icon-btn" id="btnBuild" title="Build APK"><svg class="ic"><use href="#i-package"/></svg></button>
+        <label class="check fl-only" title="Hot reload whenever a .dart file in lib/ changes — saved by you or the agent"><input type="checkbox" id="flAuto" checked> Reload on save</label>
         <div class="spacer"></div>
-        <button class="btn small plain" id="btnNewApp" title="Create a new Android app with a Gradle wrapper"><svg class="ic"><use href="#i-plus"/></svg> New app</button>
+        <button class="btn small plain" id="btnNewApp" title="Create a new Android or Flutter app"><svg class="ic"><use href="#i-plus"/></svg> New app</button>
         <button class="icon-btn" id="btnStudio" title="Open in Android Studio"><svg class="ic"><use href="#i-external"/></svg></button>
       </div>
       <div class="warnbox slim" id="devHint" hidden></div>
@@ -180,7 +182,7 @@
       <nav class="droid-tabs" id="droidTabs">
         <button data-dv="run" class="active"><svg class="ic"><use href="#i-bug"/></svg> Run &amp; Logcat</button>
         <button data-dv="build"><svg class="ic"><use href="#i-package"/></svg> Build<span class="dt-dot" id="buildDot" hidden></span></button>
-        <button data-dv="gradle"><svg class="ic"><use href="#i-terminal"/></svg> Gradle</button>
+        <button data-dv="gradle"><svg class="ic"><use href="#i-terminal"/></svg> <span id="tasksTabLabel">Gradle</span></button>
         <button data-dv="devices"><svg class="ic"><use href="#i-wifi"/></svg> Devices</button>
         <div class="spacer"></div>
         <span class="dim small-text" id="androidInfo"></span>
@@ -207,6 +209,15 @@
                 <button class="icon-btn" id="kVolDown" title="Volume down"><svg class="ic"><use href="#i-vol-down"/></svg></button>
               </div>
             </div>
+            <div class="row wrap fl-only" id="flDebug">
+              <button class="chip" data-ext="debugPaint" title="Show widget boundaries, padding and alignment">Debug paint</button>
+              <button class="chip" data-ext="performanceOverlay" title="Frame timing graphs for the UI and raster threads">Performance overlay</button>
+              <button class="chip" data-ext="slowAnimations" title="Play animations 5× slower">Slow animations</button>
+              <button class="chip on" data-ext="debugBanner" title="The DEBUG banner in the corner">Debug banner</button>
+              <button class="chip" data-ext="inspector" title="Tap a widget in the app to inspect it in DevTools">Select widget</button>
+              <button class="btn small" id="btnDevtools" title="Open Dart DevTools for the running app: inspector, performance, memory, network, logging"><svg class="ic"><use href="#i-activity"/></svg> DevTools</button>
+            </div>
+            <p class="dim small-text" id="flNoMirror" hidden></p>
             <div class="row" id="typeRow" hidden>
               <input id="typeText" class="grow" placeholder="Type into the phone, Enter to send">
               <button class="icon-btn" id="btnType"><svg class="ic"><use href="#i-keyboard"/></svg></button>
@@ -222,7 +233,7 @@
             </div>
             <div class="row wrap logcat-bar">
               <button class="btn small" id="btnLogcat"><svg class="ic"><use href="#i-play"/></svg> <span>Start logcat</span></button>
-              <select id="lcScope" title="Which logs"><option value="app">This app only</option><option value="all">Whole device</option></select>
+              <select id="lcScope" title="Which logs"><option value="flutter">Flutter app</option><option value="app">This app only</option><option value="all">Whole device</option></select>
               <select id="lcLevel" title="Minimum level">
                 <option value="V">Verbose</option><option value="D">Debug</option><option value="I">Info</option>
                 <option value="W">Warn</option><option value="E">Error</option>
@@ -249,9 +260,27 @@
         <pre id="andLog"></pre>
       </div>
 
-      <!-- gradle tasks -->
+      <!-- gradle / flutter tasks -->
       <div class="droid-view scroll" data-dv="gradle" hidden>
-        <div class="group">
+        <div class="group fl-only">
+          <h3>Run a command</h3>
+          <div class="row">
+            <input id="flTask" class="mono grow" placeholder="flutter …  e.g. pub get, build apk --release, test, analyze — or dart run build_runner build">
+            <button class="btn primary" id="btnFlTask"><svg class="ic"><use href="#i-play"/></svg> Run</button>
+          </div>
+          <div class="chips" id="flChips"></div>
+        </div>
+        <div class="group fl-only">
+          <h3>Packages</h3>
+          <p class="dim small-text">Adds a dependency from <a href="https://pub.dev" target="_blank" rel="noopener">pub.dev</a> to pubspec.yaml (<code>flutter pub add</code>). Several at once: separate them with spaces; <code>dev:name</code> for dev dependencies.</p>
+          <div class="row"><input id="flPkg" class="mono grow" placeholder="e.g. http provider shared_preferences"><button class="btn" id="btnFlPkg"><svg class="ic"><use href="#i-plus"/></svg> Add</button></div>
+        </div>
+        <div class="group fl-only">
+          <h3>Platforms</h3>
+          <p class="dim small-text" id="flPlatInfo"></p>
+          <div class="chips" id="flPlatforms"></div>
+        </div>
+        <div class="group droid-only">
           <h3>Run a task</h3>
           <div class="row">
             <input id="gradleTask" class="mono grow" placeholder="./gradlew …  e.g. clean, :app:assembleRelease, test --info">
@@ -265,7 +294,7 @@
         </div>
       </div>
 
-      <!-- devices -->
+      <!-- devices (shared) -->
       <div class="droid-view scroll" data-dv="devices" hidden>
         <div class="cards">
           <div class="group">
@@ -296,6 +325,7 @@
         <p class="dim" id="droidEmptyText">This project isn't an Android Gradle project.</p>
         <div class="tiles">
           <button class="tile" id="tileNewApp"><svg class="ic"><use href="#i-plus"/></svg><span>New Android app</span></button>
+          <button class="tile" id="tileNewFlutter"><svg class="ic"><use href="#i-zap"/></svg><span>New Flutter app</span></button>
           <button class="tile" id="tileOpenApp"><svg class="ic"><use href="#i-folder"/></svg><span>Open an app folder</span></button>
         </div>
       </div>
@@ -422,6 +452,34 @@
   </form>
 </dialog>
 
+<!-- ============ NEW FLUTTER APP ============ -->
+<dialog id="dlgNewFlutter" class="sheet">
+  <form method="dialog" id="newFlutterForm">
+    <h3>New Flutter app</h3>
+    <div class="templates" id="nfTemplates">
+      <button type="button" class="tpl active" data-tpl="app"><b>Counter app</b><span class="dim">The classic starter: Material 3, a counter and a test</span></button>
+      <button type="button" class="tpl" data-tpl="empty"><b>Empty app</b><span class="dim">A single “Hello World” screen</span></button>
+    </div>
+    <label class="field">App name<input id="nfName" placeholder="My App" autocomplete="off"></label>
+    <div class="row">
+      <label class="field grow">Organization<input id="nfOrg" class="mono" placeholder="com.example" autocomplete="off"></label>
+      <label class="field grow">Save location<input id="nfParent" class="mono" placeholder="~/projects"></label>
+    </div>
+    <div class="field">Platforms
+      <div class="chips" id="nfPlatforms">
+        <label class="check"><input type="checkbox" value="android" checked> Android</label>
+        <label class="check"><input type="checkbox" value="ios" checked> iOS</label>
+        <label class="check"><input type="checkbox" value="web" checked> Web</label>
+        <label class="check"><input type="checkbox" value="linux"> Linux</label>
+        <label class="check"><input type="checkbox" value="macos"> macOS</label>
+        <label class="check"><input type="checkbox" value="windows"> Windows</label>
+      </div>
+    </div>
+    <p class="dim small-text" id="nfInfo">Runs <code>flutter create</code>, fetches packages and initialises Git. You can add platforms later.</p>
+    <div class="row end"><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Create app</button></div>
+  </form>
+</dialog>
+
 <!-- ============ CLONE / NEW PROJECT ============ -->
 <dialog id="dlgProject" class="sheet">
   <form method="dialog" id="projForm">
@@ -463,7 +521,7 @@
         <h2>Setup</h2>
         <p class="dim">Forge Studio uses the tools installed on this computer. Install anything missing with one click: it comes from the official source, at the latest version, into your home folder, with no admin password and no Android Studio needed. <span id="setupOs"></span></p>
         <div id="setupList"></div>
-        <div class="row end"><button class="btn" id="setupRecheck"><svg class="ic"><use href="#i-refresh"/></svg> Check again</button><button class="btn primary" id="setupAndroidAll"><svg class="ic"><use href="#i-phone"/></svg> Set up everything for Android</button></div>
+        <div class="row end"><button class="btn" id="setupRecheck"><svg class="ic"><use href="#i-refresh"/></svg> Check again</button><button class="btn" id="setupFlutterAll"><svg class="ic"><use href="#i-zap"/></svg> Set up everything for Flutter</button><button class="btn primary" id="setupAndroidAll"><svg class="ic"><use href="#i-phone"/></svg> Set up everything for Android</button></div>
       </section>
 
       <section data-sec="general">

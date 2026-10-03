@@ -79,11 +79,13 @@ const fmtSize = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0)
 const S = {
   profile: null, projects: [], tools: {}, previews: {}, procs: [], providers: [], agents: [], settings: {}, prefs: {}, web: {},
   cur: null, curChat: {}, items: {}, loaded: {}, meta: {}, running: {},
-  procLogs: {}, consoleProc: null, lastGradle: null, viewProc: null,
+  procLogs: {}, consoleProc: null, lastGradle: null, viewProc: null, flutter: {}, fdevs: [],
   attachments: [],
   device: store.get("fs:device", "fill"), rotated: false,
 };
 const project = () => S.projects.find((p) => p.path === S.cur);
+const isFlutter = () => !!project()?.flutter;
+const BUILD_KINDS = new Set(["gradle", "flutter-task"]);  // jobs whose output goes to the Build view
 const chatId = () => (S.cur ? S.curChat[S.cur] || null : null);
 const pkey = (k) => `fs:${S.profile?.id}:${k}`;
 
@@ -337,14 +339,16 @@ function renderChat() {
   $("#agentPill").textContent = S.agents.find((a) => a.id === ag)?.name || "";
   if (!S.cur) {
     $("#chatPane").classList.remove("home"); $("#homeChips").hidden = true;
-    box.innerHTML = `<div class="empty"><img src="icon.svg" alt=""><h2>Welcome to Forge Studio</h2><p>Pick a project in the sidebar, or start one below. Switch between <b>Agent</b>, <b>Editor</b> and <b>Android</b> at the top — the agent comes with you.</p>
+    box.innerHTML = `<div class="empty"><img src="icon.svg" alt=""><h2>Welcome to Forge Studio</h2><p>Pick a project in the sidebar, or start one below. Switch between <b>Agent</b>, <b>Editor</b> and <b>Android</b> / <b>Flutter</b> at the top — the agent comes with you.</p>
       <div class="tiles" id="welcomeTiles">
         <div class="tile" data-w="open">${ic("folder")}<span class="label">Open Project</span></div>
         <div class="tile" data-w="clone">${ic("clone")}<span class="label">Clone Repo</span></div>
         <div class="tile" data-w="new">${ic("folder-plus")}<span class="label">New Project</span></div>
         <div class="tile hot" data-w="android">${ic("phone")}<span class="label">New Android App</span></div>
+        <div class="tile hot" data-w="flutter">${ic("zap")}<span class="label">New Flutter App</span></div>
       </div></div>`;
     box.querySelector('[data-w="android"]').onclick = openNewApp;
+    box.querySelector('[data-w="flutter"]').onclick = openNewFlutter;
     box.querySelector('[data-w="open"]').onclick = () => $("#btnAdd").click();
     box.querySelector('[data-w="clone"]').onclick = () => openProjectDialog("clone");
     box.querySelector('[data-w="new"]').onclick = () => openProjectDialog("new");
@@ -619,6 +623,7 @@ function renderProjects() {
     if (p.path === S.cur) li.className = "active";
     const tags = [];
     if (p.android) tags.push('<span class="tag">Android</span>');
+    if (p.flutter) tags.push('<span class="tag">Flutter</span>');
     if (p.web?.length) tags.push('<span class="tag">Web</span>');
     if (busyProjects.has(p.path)) tags.push('<span class="tag busy"><i class="dot"></i>working</span>');
     if (S.previews[p.path]) tags.push('<span class="tag live"><i class="dot"></i>live</span>');
@@ -638,7 +643,7 @@ function renderTools() {
   const row = (name, ok) => `<span class="tool-row ${ok ? "ok" : "bad"}">${ic(ok ? "check" : "x")} ${name}</span>`;
   $("#toolStatus").innerHTML = [
     ...S.agents.filter((a) => a.installed).map((a) => row(a.name, true)),
-    row("Git", t.git), row("Android SDK / adb", t.adb), row("Android Studio", t.studio), row("Java", t.java), row("Node.js", t.node), row("scrcpy", t.scrcpy),
+    row("Git", t.git), row("Flutter", t.flutter), row("Android SDK / adb", t.adb), row("Android Studio", t.studio), row("Java", t.java), row("Node.js", t.node), row("scrcpy", t.scrcpy),
   ].join("");
 }
 async function selectProject(path) {
@@ -651,17 +656,21 @@ async function selectProject(path) {
   if (innerWidth < 900) $("#layout").classList.remove("show-sidebar");
   renderProjects(); setupPreview(); setupAndroid(); renderProcs();
   if (typeof codeProjectChanged === "function") codeProjectChanged();
-  // Android mode only exists for Android apps; websites and other projects don't get the tab
-  $('#modes [data-mode="android"]').hidden = !!p && !p.android;
-  if (p && !p.android && S.mode === "android") setMode(store.get("fs:lastMode", "editor"));
-  if (S.mode === "android") loadToolchain();
+  // Android mode only exists for Android and Flutter apps; websites and other projects don't get the tab
+  $('#modes [data-mode="android"]').hidden = !!p && !p.android && !p.flutter;
+  $('#modes [data-mode="android"]').title = p?.flutter ? "Flutter — run with hot reload, debug and build your app (Ctrl+3)"
+    : "Android — build, run and debug apps with Gradle (Ctrl+3)";
+  if (p && !p.android && !p.flutter && S.mode === "android") setMode(store.get("fs:lastMode", "editor"));
+  if (S.mode === "android") { loadToolchain(); act(refreshDevices)(); }  // Flutter and Android projects list different devices
   renderStatusBar();
   await openChat(chatId()).catch((e) => { S.curChat[S.cur] = null; renderChat(); toast(e.message, true); });
 }
 async function loadState() {
   const st = await api("/api/state");
   Object.assign(S, { profile: st.profile, projects: st.projects, tools: st.tools, previews: st.previews, procs: st.procs,
-    providers: st.providers, settings: st.settings, agents: st.agents, plugins: st.plugins || [], prefs: st.prefs || {}, web: st.web });
+    providers: st.providers, settings: st.settings, agents: st.agents, plugins: st.plugins || [], prefs: st.prefs || {}, web: st.web,
+    flutter: st.flutter || {} });
+  for (const [proj, r] of Object.entries(S.flutter)) if (r.device === "web-server") S.previews[proj] = { url: r.url, flutter: true };
   for (const [proj, cid] of Object.entries(st.current)) if (!(proj in S.curChat)) S.curChat[proj] = cid;
   for (const cid of st.running) S.running[cid] ??= "";
   if (S.cur && !project()) S.cur = null;
@@ -779,9 +788,12 @@ function renderSetup() {
   box.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = act(async () => { await navigator.clipboard.writeText(b.dataset.copy); toast("Command copied, paste it in a terminal"); })));
 }
 function renderSetupHint() {
-  const miss = (S.setup?.items || []).filter((i) => i.group === "Android" && !i.ok && !i.optional);
+  const f = project()?.flutter;
+  const groups = f ? ["Flutter", ...(f.platforms.includes("android") ? ["Android"] : [])] : ["Android"];
+  const miss = (S.setup?.items || []).filter((i) => groups.includes(i.group) && !i.ok && !i.optional);
   $("#setupHint").hidden = !miss.length;
-  $("#setupHintText").textContent = `To build Android apps, install: ${miss.map((i) => i.name).join(", ")}. No Android Studio needed.`;
+  $("#setupHintText").textContent = f ? `To run Flutter apps, install: ${miss.map((i) => i.name).join(", ")}.`
+    : `To build Android apps, install: ${miss.map((i) => i.name).join(", ")}. No Android Studio needed.`;
 }
 $("#btnSetupHint").onclick = () => openSettings("setup");
 $("#setupRecheck").onclick = act(loadSetup);
@@ -792,6 +804,13 @@ $("#setupAndroidAll").onclick = act(async () => {
   const ids = todo.map((i) => i.id).filter((id) => !(id === "jdk" && todo.some((t) => t.id === "android-sdk")));
   for (const id of ids) await api("/api/setup/install", { item: id });
   toast("Installing the Android tools… progress is shown here and in Processes");
+});
+$("#setupFlutterAll").onclick = act(async () => {
+  const todo = S.setup.items.filter((i) => ["Flutter", "Android"].includes(i.group) && !i.ok && i.install && !i.running);
+  if (!todo.length) return toast("Flutter and the Android tools are already installed");
+  const ids = todo.map((i) => i.id).filter((id) => !(id === "jdk" && todo.some((t) => t.id === "android-sdk")));
+  for (const id of ids) await api("/api/setup/install", { item: id });
+  toast("Installing Flutter and the Android tools… progress is shown here and in Processes");
 });
 
 function openSettings(sec = "general") {
@@ -997,7 +1016,9 @@ function setupPreview() {
   const p = project();
   const sel = $("#webRoot");
   sel.innerHTML = "";
-  const roots = p?.web?.length ? p.web : p ? [{ dir: p.path, rel: ".", kind: "static", command: null }] : [];
+  const roots = p?.flutter ? [{ dir: p.path, rel: ".", kind: "Flutter web", command: null }]
+    : p?.web?.length ? p.web : p ? [{ dir: p.path, rel: ".", kind: "static", command: null }] : [];
+  $("#devCmd").disabled = !!p?.flutter;
   for (const r of roots) sel.append(new Option(`${r.rel === "." ? p.name : r.rel} (${r.kind})`, r.dir));
   const saved = p && store.get(pkey("prev:" + p.path), null);
   if (saved?.dir && roots.some((r) => r.dir === saved.dir)) sel.value = saved.dir;
@@ -1046,29 +1067,109 @@ async function loadLog(id, pre) {
 // ============================================================ android
 function setupAndroid() {
   const p = project();
-  const a = p?.android;
+  const a = p?.android, f = p?.flutter;
+  $("#droidPane").classList.toggle("flutter", !!f);
+  $("#modeDroidLabel").textContent = f ? "Flutter" : "Android";
+  $("#tasksTabLabel").textContent = f ? "Flutter" : "Gradle";
+  setVariants(!!f);
+  $("#btnRun").title = f ? "Build and launch with hot reload (the app's output shows on the right)" : "Build, install and launch (logcat starts automatically)";
+  $("#btnRestart").title = f ? "Hot restart (resets app state)" : "Restart the app without rebuilding";
+  $("#btnBuild").title = f ? "Build for the selected device's platform" : "Build APK";
   const mods = $("#moduleSel");
   mods.innerHTML = "";
   (a?.modules || []).forEach((m) => mods.append(new Option(`${m.name}${m.applicationId ? "  ·  " + m.applicationId : ""}`, m.name)));
   const mod = a?.modules?.[0];
-  $("#androidInfo").textContent = !a ? "" : [mod?.applicationId, mod?.minSdk && `minSdk ${mod.minSdk}`,
+  $("#androidInfo").textContent = f ? [f.applicationId || f.name, f.version && `v${f.version}`, f.platforms.join(" · "),
+    S.tools.flutter?.version && `Flutter ${S.tools.flutter.version}`].filter(Boolean).join(" · ") : !a ? "" : [mod?.applicationId, mod?.minSdk && `minSdk ${mod.minSdk}`,
     mod?.compileSdk && `compileSdk ${mod.compileSdk}`, a.gradle && `Gradle ${a.gradle}`, mod && (mod.compose ? "Compose" : "Views")].filter(Boolean).join(" · ");
-  $("#droidEmpty").hidden = !!a;
-  $("#droidEmptyText").textContent = !p ? "Pick a project, or create a new Android app." : `${p.name} isn't an Android Gradle project (no settings.gradle).`;
-  $("#droidPane").classList.toggle("no-app", !a);
+  $("#droidEmpty").hidden = !!(a || f);
+  $("#droidEmptyText").textContent = !p ? "Pick a project, or create a new Android or Flutter app." : `${p.name} isn't an Android Gradle or Flutter project.`;
+  $("#droidPane").classList.toggle("no-app", !a && !f);
   $("#wrapperHint").hidden = !a || a.gradlew;
-  for (const id of ["#btnRun", "#btnBuild", "#btnStopApp", "#btnRestart", "#btnTask"]) $(id).disabled = !a || !a.gradlew;
-  renderTaskChips();
+  for (const id of ["#btnRun", "#btnBuild", "#btnStopApp", "#btnRestart", "#btnTask"]) $(id).disabled = f ? !S.tools.flutter : !a || !a.gradlew;
+  $("#btnFlTask").disabled = $("#btnFlPkg").disabled = !S.tools.flutter;
+  if (!f) $("#btnRun").innerHTML = ic("play") + " Run";
+  renderTaskChips(); renderFlutterRun();
   $("#btnStudio").disabled = !p;
   $("#andLog").textContent = ""; $("#btnFix").hidden = true; $("#btnConsoleStop").hidden = true;
   S.consoleProc = null;
-  const g = p && S.procs.filter((x) => x.kind === "gradle" && x.project === p.path).pop();
+  const g = p && S.procs.filter((x) => BUILD_KINDS.has(x.kind) && x.project === p.path).pop();
   if (g) { S.consoleProc = g.id; $("#consoleTitle").textContent = g.label; $("#btnConsoleStop").hidden = !g.running; loadLog(g.id, $("#andLog")); }
   else $("#consoleTitle").textContent = "Build output";
-  LC.proc = null; LC.lines = []; $("#crashBar").hidden = true;
-  const l = p && S.procs.filter((x) => x.kind === "logcat" && x.project === p.path).pop();
-  if (l) { attachLogcat(l.id, l.running); api("/api/proc/log?id=" + l.id).then((d) => { d.lines.forEach((x) => lcAdd(x, true)); lcRender(); }).catch(() => {}); }
+  $('#lcScope option[value="flutter"]').hidden = !f;
+  $("#lcScope").value = f ? store.get("fs:flscope", "flutter") : $("#lcScope").value === "flutter" ? "app" : $("#lcScope").value;
+  attachRunLog();
+}
+// the log column of Run & Logcat: a Flutter project's `flutter run` output, or logcat
+function attachRunLog() {
+  const p = project();
+  LC.proc = null; LC.lines = []; LC.crash = null; LC.flErr = false; $("#crashBar").hidden = true;
+  LC.flutter = !!p?.flutter && $("#lcScope").value === "flutter";
+  $("#btnLogcat").hidden = LC.flutter;
+  const kind = LC.flutter ? "flutter" : "logcat";
+  const l = p && S.procs.filter((x) => x.kind === kind && x.project === p.path).pop();
+  if (l) { attachLogcat(l.id, l.running); api("/api/proc/log?id=" + l.id).then((d) => { if (LC.proc === l.id) { d.lines.forEach((x) => lcAdd(x, true)); lcRender(); } }).catch(() => {}); }
   else { lcSetRunning(false); lcRender(); }
+}
+// ---- flutter
+const flRun = () => S.procs.find((x) => x.kind === "flutter" && x.project === S.cur && x.running);
+const fdev = () => S.fdevs.find((x) => x.id === $("#deviceSel").value);
+const isAndroidDev = (d) => d?.platform?.startsWith("android");
+function setVariants(flutter) {
+  const sel = $("#variantSel"), want = flutter ? "flutter" : "android";
+  if (sel.dataset.kind === want) return;
+  sel.dataset.kind = want;
+  sel.innerHTML = flutter ? '<option value="debug">debug</option><option value="profile">profile</option><option value="release">release</option>'
+    : '<option value="Debug">debug</option><option value="Release">release</option>';
+  sel.value = store.get(flutter ? "fs:flmode" : "fs:variant", flutter ? "debug" : "Debug");
+  if (!sel.value) sel.selectedIndex = 0;
+}
+function renderFlutterRun() {
+  if (!isFlutter()) return;
+  const on = !!flRun(), started = !!S.flutter[S.cur]?.started;
+  $("#btnHotReload").disabled = $("#btnRestart").disabled = !started;
+  $("#btnStopApp").disabled = !on;
+  // the Web server device has no Dart VM service, so no debug toggles or DevTools there
+  const vm = started && S.flutter[S.cur]?.device !== "web-server";
+  $$("#flDebug [data-ext]").forEach((b) => (b.disabled = !vm));
+  $("#btnDevtools").disabled = !vm || variant() === "release";
+  $("#flDebug").title = started && !vm ? "Debug tools need Android, desktop or Chrome — the Web server device has no Dart VM service" : "";
+  $("#btnRun").innerHTML = ic("play") + (on ? " Rerun" : " Run");
+  $("#btnRun").disabled = !S.tools.flutter;
+  const d = fdev();
+  $("#flNoMirror").hidden = !d || isAndroidDev(d);
+  $("#flNoMirror").textContent = d?.platform?.startsWith("web") ? (d.id === "web-server" ? "Web apps on the Web server device open in Agent mode → Preview." : "Web apps open in their own browser window.")
+    : "Desktop and iOS apps open in their own window; the screen mirror is for Android devices.";
+}
+async function flutterRun() {
+  const dev = $("#deviceSel").value;
+  if (!dev) throw new Error("Pick a device: connect a phone, launch an emulator, or choose Web server / desktop");
+  if (flRun()) {  // rerun: stop the old session first so the new build is what you see
+    await api("/api/flutter/stop", { project: S.cur });
+    for (let i = 0; i < 40 && flRun(); i++) await new Promise((r) => setTimeout(r, 250));
+    if (flRun()) throw new Error("The previous run is still stopping — try again in a moment");
+  }
+  $("#lcScope").value = "flutter"; store.set("fs:flscope", "flutter"); attachRunLog(); setDroidView("run");
+  $$("#flDebug [data-ext]").forEach((b) => b.classList.toggle("on", b.dataset.ext === "debugBanner"));
+  await api("/api/flutter/run", { project: S.cur, device: dev, mode: variant(), auto: $("#flAuto").checked });
+  toast(dev === "web-server" ? "Building… the app opens in Agent mode → Preview" : "Building and launching… the app's output shows on the right");
+}
+const FL_BUILD = { android: "apk", web: "web", linux: "linux", darwin: "macos", ios: "ios", windows: "windows" };
+function flutterBuildTarget() {
+  const plat = (fdev()?.platform || "android").split("-")[0];
+  return FL_BUILD[plat] || "apk";
+}
+async function flutterTask(args) {
+  $("#andLog").textContent = ""; $("#btnFix").hidden = true; setDroidView("build");
+  await api("/api/flutter/task", { project: S.cur, args });
+}
+function openNewFlutter() {
+  if (!S.tools.flutter) { toast("Install the Flutter SDK first (Settings → Setup, one click)", true); return openSettings("setup"); }
+  $("#nfName").value = ""; $("#nfOrg").value = store.get("fs:nforg", "com.example");
+  $("#nfParent").value = store.get("fs:nfparent", "~/projects");
+  const host = /Mac/.test(navigator.platform) ? "macos" : "linux";
+  $$("#nfPlatforms input").forEach((c) => (c.checked = ["android", "ios", "web", host].includes(c.value)));
+  $("#dlgNewFlutter").showModal(); $("#nfName").focus();
 }
 function setDroidView(v) {
   $$("#droidTabs button").forEach((b) => b.classList.toggle("active", b.dataset.dv === v));
@@ -1076,9 +1177,12 @@ function setDroidView(v) {
   if (v === "build") $("#buildDot").hidden = true;
   store.set("fs:droidView", v);
 }
-const variant = () => $("#variantSel").value || "Debug";
+const variant = () => $("#variantSel").value || (isFlutter() ? "debug" : "Debug");
 const GRADLE_CHIPS = ["clean", "assemble{V}", "bundle{V}", "test{V}UnitTest", "lint{V}", "connected{V}AndroidTest", "dependencies", "signingReport", "tasks"];
+const FLUTTER_CHIPS = ["pub get", "pub upgrade", "pub outdated", "analyze", "test", "dart format .", "dart fix --apply", "clean",
+  "build apk", "build appbundle", "build web", "build {desktop}", "gen-l10n", "dart run build_runner build -d", "doctor -v"];
 function renderTaskChips() {
+  if (isFlutter()) return renderFlutterChips();
   const m = $("#moduleSel").value || "app";
   $("#taskChips").innerHTML = GRADLE_CHIPS.map((t) => {
     const task = t.replace("{V}", variant());
@@ -1087,7 +1191,28 @@ function renderTaskChips() {
   }).join("");
   $$("#taskChips .chip").forEach((c) => (c.onclick = act(() => { $("#gradleTask").value = c.dataset.task; return gradleTask(c.dataset.task); })));
 }
+function renderFlutterChips() {
+  const f = project().flutter, desktop = /Mac/.test(navigator.platform) ? "macos" : "linux";
+  const mode = variant() === "debug" ? "" : ` --${variant()}`;
+  $("#flChips").innerHTML = FLUTTER_CHIPS.map((t) => {
+    let cmd = t.replace("{desktop}", desktop);
+    if (/^build (apk|appbundle|web|linux|macos)$/.test(cmd) && mode) cmd += mode;
+    return `<button class="chip mono" data-cmd="${esc(cmd)}">${esc(cmd)}</button>`;
+  }).join("");
+  $$("#flChips .chip").forEach((c) => (c.onclick = act(() => { $("#flTask").value = c.dataset.cmd; return flutterTask(c.dataset.cmd); })));
+  const missing = ["android", "ios", "web", "linux", "macos", "windows"].filter((x) => !f.platforms.includes(x));
+  $("#flPlatInfo").textContent = `This app targets ${f.platforms.join(", ") || "no platforms yet"}.` + (missing.length ? " Add another:" : "");
+  $("#flPlatforms").innerHTML = missing.map((x) => `<button class="chip" data-plat="${x}">${ic("plus")} ${x}</button>`).join("");
+  $$("#flPlatforms .chip").forEach((c) => (c.onclick = act(() => flutterTask(`create --platforms=${c.dataset.plat} .`))));
+}
 async function loadToolchain() {
+  if (isFlutter()) {
+    const t = S.tools, fv = t.flutter;
+    const row = (k, v) => `<div><span class="dim">${k}</span><span class="mono">${esc(v || "—")}</span></div>`;
+    $("#toolchain").innerHTML = row("Flutter", fv && `${fv.version || "?"}${fv.channel ? " · " + fv.channel : ""}`) + row("Dart", fv?.dart) +
+      row("Flutter SDK", fv?.root) + row("Android SDK", t.sdk) + row("JDK", t.java) + row("adb", t.adb);
+    return;
+  }
   try {
     S.sdk ??= await api("/api/android/sdk");
     const a = project()?.android, t = S.tools;
@@ -1102,16 +1227,32 @@ function openNewApp() {
   $("#naParent").value = "~/AndroidStudioProjects";
   $("#dlgNewApp").showModal(); $("#naName").focus();
 }
-const appId = () => project()?.android?.modules?.find((m) => m.name === $("#moduleSel").value)?.applicationId;
-const serial = () => $("#deviceSel").value || null;
+const appId = () => project()?.flutter ? project().flutter.applicationId : project()?.android?.modules?.find((m) => m.name === $("#moduleSel").value)?.applicationId;
+// the adb serial for the screen mirror, input and logcat (a Flutter device only has one when it's an Android device)
+const serial = () => isFlutter() ? (isAndroidDev(fdev()) ? fdev().id : null) : $("#deviceSel").value || null;
+const FL_KIND = { android: "Android", web: "Web", linux: "Desktop", darwin: "macOS", windows: "Desktop", ios: "iOS" };
 async function refreshDevices() {
-  const d = await api("/api/android/devices");
-  const sel = $("#deviceSel"), prev = sel.value || store.get("fs:serial", "");
+  const fl = isFlutter() && S.tools.flutter;
+  const sel = $("#deviceSel");
+  if (fl && !S.fdevs.length) { sel.innerHTML = ""; sel.append(new Option("Looking for devices…", "")); }
+  const [d, fd] = await Promise.all([api("/api/android/devices"), fl ? api("/api/flutter/devices") : null]);
+  if (fd) S.fdevs = fd.devices;
+  const prev = sel.value || store.get(fl ? "fs:fdev" : "fs:serial", "");
   sel.innerHTML = "";
-  if (!d.devices.length) sel.append(new Option("No device — plug in USB (debugging on) or connect over Wi-Fi", ""));
-  for (const x of d.devices) sel.append(new Option(`${x.emulator ? "Emulator" : x.wifi ? "Phone (Wi-Fi)" : "Phone (USB)"} · ${x.model || x.serial}  (${x.state === "device" ? x.serial : x.state})`, x.serial));
   const ready = d.devices.filter((x) => x.state === "device").map((x) => x.serial);
-  if (ready.includes(prev)) sel.value = prev; else if (ready.length) sel.value = ready[0];
+  if (fl) {
+    for (const x of S.fdevs) {
+      const kind = x.emulator ? "Emulator" : FL_KIND[x.platform.split("-")[0]] || x.platform;
+      sel.append(new Option(`${kind} · ${x.name}  (${x.sdk || x.id})`, x.id));
+    }
+    const ids = S.fdevs.map((x) => x.id);
+    sel.value = ids.includes(prev) ? prev : S.fdevs.find(isAndroidDev)?.id || S.fdevs.find((x) => x.id !== "web-server")?.id || ids[0] || "";
+    if (fd.error) toast(fd.error, true);
+  } else {
+    if (!d.devices.length) sel.append(new Option("No device — plug in USB (debugging on) or connect over Wi-Fi", ""));
+    for (const x of d.devices) sel.append(new Option(`${x.emulator ? "Emulator" : x.wifi ? "Phone (Wi-Fi)" : "Phone (USB)"} · ${x.model || x.serial}  (${x.state === "device" ? x.serial : x.state})`, x.serial));
+    if (ready.includes(prev)) sel.value = prev; else if (ready.length) sel.value = ready[0];
+  }
   const bad = ready.length ? null : d.devices.find((x) => x.state !== "device");
   $("#devHint").hidden = !bad;
   if (bad?.state === "no permissions") $("#devHint").innerHTML = `Linux is blocking USB access to <b>${esc(bad.serial)}</b>. Run once in a terminal, then replug the phone:<pre>sudo apt install android-sdk-platform-tools-common\nsudo usermod -aG plugdev $USER   # then log out and back in</pre>Or connect over Wi-Fi below.`;
@@ -1122,8 +1263,8 @@ async function refreshDevices() {
   d.avds.forEach((n) => avd.append(new Option(n, n)));
   $("#avdRow").hidden = !d.avds.length;
   $("#btnScrcpy").hidden = !S.tools.scrcpy;
-  renderStatusBar();
-  if (d.error) toast(d.error, true);
+  renderFlutterRun(); renderStatusBar();
+  if (d.error && !isFlutter()) toast(d.error, true);
 }
 async function gradleTask(task) {
   $("#andLog").textContent = ""; $("#btnFix").hidden = true; setDroidView("build");
@@ -1134,7 +1275,17 @@ async function gradleTask(task) {
 const LC = { proc: null, lines: [], paused: false, crash: null };
 const LVL = { V: 0, D: 1, I: 2, W: 3, E: 4, F: 5, A: 5 };
 const LC_RE = /^(\d\d-\d\d)\s+(\d\d:\d\d:\d\d\.\d+)\s+(\d+)\s+(\d+)\s+([VDIWEFA])\s+(.*?)\s*: ?(.*)$/;
+// `flutter run` output: print()s, status lines and framework error blocks (═══ Exception caught by … ═══)
+const FL_ERR_START = /^═+╡? ?(EXCEPTION CAUGHT BY|Exception caught by)/i, FL_ERR_END = /^═{8,}\s*$/;
+function flParse(raw) {
+  const start = FL_ERR_START.test(raw), inErr = LC.flErr || start;
+  if (start) LC.flErr = true; else if (LC.flErr && FL_ERR_END.test(raw)) LC.flErr = false;
+  const lvl = inErr || /^(✗|E\/|\[ERROR|Error: |Exception|Unhandled exception|FAILURE:)|^lib\/.*:\d+:\d+: Error/.test(raw) ? "E"
+    : /^(W\/|Warning: )|: Warning: /.test(raw) ? "W" : "I";
+  return { raw, time: new Date().toTimeString().slice(0, 8), lvl, tag: "", msg: raw, flStart: start };
+}
 function lcParse(raw) {
+  if (LC.flutter) return flParse(raw);
   const m = raw.match(LC_RE);
   if (!m) return { raw, time: "", lvl: "I", tag: "", msg: raw };
   return { raw, time: m[2], pid: m[3], lvl: m[5], tag: m[6], msg: m[7] };
@@ -1154,7 +1305,8 @@ function lcRender() {
   const box = $("#logcat");
   box.innerHTML = "";
   const vis = LC.lines.filter(lcVisible).slice(-2000);
-  if (!vis.length) box.innerHTML = `<div class="dim lc-empty">${LC.proc ? "Waiting for log lines…" : "Press <b>Run app</b> (logcat starts automatically) or <b>Start logcat</b>."}</div>`;
+  if (!vis.length) box.innerHTML = `<div class="dim lc-empty">${LC.proc ? "Waiting for log lines…" : LC.flutter ? "Press <b>Run</b>: the app's output (print, errors, hot reload) shows here."
+    : "Press <b>Run app</b> (logcat starts automatically) or <b>Start logcat</b>."}</div>`;
   const frag = document.createDocumentFragment();
   vis.forEach((l) => frag.append(lcRow(l)));
   box.append(frag);
@@ -1164,10 +1316,19 @@ function lcAdd(raw, bulk) {
   const l = lcParse(raw);
   LC.lines.push(l);
   if (LC.lines.length > 6000) LC.lines.splice(0, 1000);
-  if (/FATAL EXCEPTION|ANR in /.test(l.msg) || (l.tag === "AndroidRuntime" && l.lvl === "E" && !LC.crash)) {
+  if (LC.flutter) {  // a framework error: collect the whole block for "Ask to fix"
+    if (l.flStart) {
+      LC.crash = { t: Date.now(), lines: [], fl: true };
+      if (!bulk) {
+        alertUser("crash", "Flutter error", project()?.name || "", () => { setMode("android"); setDroidView("run"); });
+        $("#crashText").textContent = "Your app threw an error."; $("#crashBar").hidden = false;
+      }
+    }
+    if (LC.crash?.fl && LC.crash.lines.length < 150 && (l.lvl === "E" || LC.flErr)) LC.crash.lines.push(l.raw);
+  } else if (/FATAL EXCEPTION|ANR in /.test(l.msg) || (l.tag === "AndroidRuntime" && l.lvl === "E" && !LC.crash)) {
     if (!LC.crash || Date.now() - LC.crash.t > 3000) LC.crash = { t: Date.now(), lines: [] };
   }
-  if (LC.crash && LC.crash.lines.length < 80 && Date.now() - LC.crash.t < 3000 && (l.lvl === "E" || l.lvl === "F")) {
+  if (LC.crash && !LC.flutter && LC.crash.lines.length < 80 && Date.now() - LC.crash.t < 3000 && (l.lvl === "E" || l.lvl === "F")) {
     LC.crash.lines.push(l.raw);
     if (!bulk && LC.crash.lines.length === 1) alertUser("crash", /ANR/.test(l.msg) ? "App not responding" : "App crashed", appId() || project()?.name || "", () => { setMode("android"); setDroidView("run"); });
     if (!bulk) { $("#crashText").textContent = /ANR/.test(LC.crash.lines.join("\n")) ? "The app stopped responding (ANR)." : "The app crashed."; $("#crashBar").hidden = false; }
@@ -1324,14 +1485,15 @@ function connect() {
       case "proc_start":
         S.procs.push({ id: ev.proc, kind: ev.kind, project: ev.project, label: ev.label, running: true, meta: ev.meta });
         S.procLogs[ev.proc] = [];
-        if (ev.project === S.cur && ev.kind === "gradle") {
+        if (ev.project === S.cur && BUILD_KINDS.has(ev.kind)) {
           S.consoleProc = ev.proc; $("#andLog").textContent = ""; $("#btnFix").hidden = true;
           $("#consoleTitle").textContent = ev.label; $("#btnConsoleStop").hidden = false;
         }
-        if (ev.project === S.cur && ev.kind === "logcat") { attachLogcat(ev.proc, true); $("#crashBar").hidden = true; LC.crash = null; }
+        if (ev.project === S.cur && ev.kind === (LC.flutter ? "flutter" : "logcat")) { attachLogcat(ev.proc, true); $("#crashBar").hidden = true; LC.crash = null; LC.flErr = false; }
         if (ev.project === S.cur && ev.kind === "preview") $("#prevLog").textContent = "";
-        if (ev.project === S.cur && ev.kind === "gradle" && $('[data-dv="build"]').hidden) $("#buildDot").hidden = false;
-        if (ev.project === S.cur && ev.kind === "logcat" && S.mode === "android") setDroidView("run");
+        if (ev.project === S.cur && BUILD_KINDS.has(ev.kind) && $('[data-dv="build"]').hidden) $("#buildDot").hidden = false;
+        if (ev.project === S.cur && ["logcat", "flutter"].includes(ev.kind) && S.mode === "android") setDroidView("run");
+        if (ev.project === S.cur && ev.kind === "flutter") renderFlutterRun();
         renderProcs(); renderStatusBar(); break;
       case "log":
         if (ev.kind === "setup") {
@@ -1342,7 +1504,7 @@ function connect() {
           (S.procLogs[ev.proc] ??= []).push(ev.line);
           if (S.procLogs[ev.proc].length > 4000) S.procLogs[ev.proc].shift();
         }
-        if (ev.project === S.cur && ev.kind === "preview") appendLog($("#prevLog"), ev.line);
+        if (ev.project === S.cur && (ev.kind === "preview" || (ev.kind === "flutter" && S.previews[ev.project]?.flutter))) appendLog($("#prevLog"), ev.line);
         if (ev.proc === S.consoleProc) appendLog($("#andLog"), ev.line);
         if (ev.proc === LC.proc) lcAdd(ev.line);
         if (ev.proc === S.viewProc) appendLog($("#procLog"), ev.line);
@@ -1355,19 +1517,34 @@ function connect() {
           if (ev.code !== 0) { S.lastGradle = { proc: ev.proc, label: ev.label }; $("#btnFix").hidden = false; }
         }
         if (ev.proc === LC.proc) lcSetRunning(false);
+        if (ev.kind === "flutter") {
+          delete S.flutter[ev.project];
+          if (S.previews[ev.project]?.flutter) {
+            delete S.previews[ev.project];
+            if (ev.project === S.cur) { $("#btnPrevStart").hidden = false; $("#btnPrevStop").hidden = true; }
+            renderProjects();
+          }
+          if (ev.project === S.cur) {
+            renderFlutterRun();
+            if (ev.code > 0 && ev.proc === LC.proc) {  // build or launch failed: offer the same fix flow as a crash
+              LC.crash = { t: Date.now(), lines: (S.procLogs[ev.proc] || []).slice(-150), fl: true, run: true };
+              $("#crashText").textContent = "flutter run failed."; $("#crashBar").hidden = false;
+            }
+          }
+        }
         if (ev.kind === "preview" && S.previews[ev.project]) {
           delete S.previews[ev.project];
           if (ev.project === S.cur) { $("#btnPrevStart").hidden = false; $("#btnPrevStop").hidden = true; $("#prevLogBox").open = true; }
           renderProjects();
         }
         renderStatusBar();
-        if (ev.kind === "gradle") alertUser("build", `${ev.label} ${ev.code === 0 ? "finished" : "failed"}`, ev.project.split("/").pop(),
+        if (BUILD_KINDS.has(ev.kind)) alertUser("build", `${ev.label} ${ev.code === 0 ? "finished" : "failed"}`, ev.project.split("/").pop(),
           () => act(async () => { if (S.cur !== ev.project) await selectProject(ev.project); setMode("android"); setDroidView("build"); })(), ev.code !== 0);
-        if (ev.kind === "gradle" && ev.project !== S.cur) toast(`${ev.label} ${ev.code === 0 ? "finished" : "failed"} in ${ev.project.split("/").pop()}`, ev.code !== 0);
+        if (BUILD_KINDS.has(ev.kind) && ev.project !== S.cur) toast(`${ev.label} ${ev.code === 0 ? "finished" : "failed"} in ${ev.project.split("/").pop()}`, ev.code !== 0);
         renderProcs(); break;
       }
       case "preview_url":
-        S.previews[ev.project] = { url: ev.url };
+        S.previews[ev.project] = { url: ev.url, flutter: ev.flutter };
         if (S.profile) store.set(pkey("url:" + ev.project), ev.url);
         if (ev.project === S.cur) { setUrl(ev.url, true); $("#btnPrevStart").hidden = true; $("#btnPrevStop").hidden = false; }
         renderProjects(); break;
@@ -1376,10 +1553,17 @@ function connect() {
           clearTimeout(S.reloadT); S.reloadT = setTimeout(() => { try { $("#iframe").contentWindow.location.reload(); } catch { $("#iframe").src = $("#iframe").src; } }, 150);
         }
         break;
+      case "flutter_state":
+        if (ev.running) S.flutter[ev.project] = { ...(S.flutter[ev.project] || {}), started: true, ...(ev.device ? { device: ev.device } : {}) };
+        if (ev.event === "started" && ev.project === S.cur) toast(ev.device === "web-server" ? "App running — open Agent mode → Preview to use it" : "App running — hot reload with ⚡ or by saving");
+        if (ev.event === "reloaded" && ev.project === S.cur) { S.flMsg = ev.text; clearTimeout(S.flMsgT); S.flMsgT = setTimeout(() => { S.flMsg = null; renderStatusBar(); }, 2500); }
+        if (ev.event === "error" && ev.project === S.cur) toast(ev.text + " — see the app output", true);
+        if (ev.project === S.cur) { renderFlutterRun(); renderStatusBar(); }
+        break;
       case "toast": toast(ev.text, ev.err); break;
       case "setup_done":
         toast(ev.text, !ev.ok);
-        act(async () => { await loadSetup(); await loadState(); if (S.cur) setupAndroid(); })();
+        act(async () => { await loadSetup(); await loadState(); if (S.cur) setupAndroid(); if (S.mode === "android") { loadToolchain(); await refreshDevices(); } })();
         break;
       case "projects_changed":
         if (ev.text) toast(ev.text);
@@ -1492,14 +1676,15 @@ $("#btnProj").onclick = (e) => {
   e.stopPropagation();
   const r = $("#btnProj").getBoundingClientRect();
   const items = S.projects.slice(0, 14).map((p) => ({
-    label: p.name + (p.path === S.cur ? "  ✓" : ""), icon: p.android ? "phone" : p.web?.length ? "globe" : "folder",
+    label: p.name + (p.path === S.cur ? "  ✓" : ""), icon: p.flutter ? "zap" : p.android ? "phone" : p.web?.length ? "globe" : "folder",
     fn: act(() => selectProject(p.path)),
   }));
   showMenu(r.left, r.bottom + 4, [...items, ...(items.length ? ["sep"] : []),
     { label: "Open folder…", icon: "folder", fn: () => $("#btnAdd").click() },
     { label: "Clone repository…", icon: "clone", fn: () => openProjectDialog("clone") },
     { label: "New project…", icon: "folder-plus", fn: () => openProjectDialog("new") },
-    { label: "New Android app…", icon: "phone", fn: openNewApp }]);
+    { label: "New Android app…", icon: "phone", fn: openNewApp },
+    { label: "New Flutter app…", icon: "zap", fn: openNewFlutter }]);
 };
 
 // ---- tasks: agent runs in progress across projects, and the ones that finished this session
@@ -1525,6 +1710,7 @@ $("#btnSideNew").onclick = act(async () => { if (!S.cur) return $("#btnAdd").cli
 // ---- agent home (empty chat in Agent mode): greeting, centred composer and suggestions
 function homeChips() {
   const p = project();
+  if (p?.flutter) return ["Add a settings screen with a dark mode switch", "Fix the problems flutter analyze reports", "Write widget tests for the home screen", "Explain how this app is structured"];
   if (p?.android) return ["Add a settings screen to my app", "Find what's slowing down app startup", "Write unit tests for the main screen", "Explain how this app is structured"];
   if (p?.web?.length) return ["Add a dark mode toggle", "Make the layout responsive on phones", "Find and fix accessibility issues", "Explain how this site is structured"];
   return ["Explain how this project is structured", "Find and fix bugs", "Write tests for the main module", "Review my uncommitted changes"];
@@ -1551,14 +1737,19 @@ function renderStatusBar() {
   const right = [];
   if (S.mode === "android") {
     const dev = $("#deviceSel")?.value && $("#deviceSel").selectedOptions[0]?.textContent.split("  (")[0];
-    const g2 = p && S.procs.find((x) => x.kind === "gradle" && x.project === p.path && x.running);
+    const g2 = p && S.procs.find((x) => BUILD_KINDS.has(x.kind) && x.project === p.path && x.running);
     if (g2) right.push(`<span class="sb busy">${ic("package")}${esc(g2.label)}</span>`);
     if (p?.android?.gradle) right.push(`<span class="sb">Gradle ${esc(p.android.gradle)}</span>`);
+    if (p?.flutter) {
+      if (S.flMsg) right.push(`<span class="sb ok">${ic("zap")}${esc(S.flMsg)}</span>`);
+      else if (flRun()) right.push(`<span class="sb ${S.flutter[p.path]?.started ? "ok" : "busy"}">${ic("zap")}${S.flutter[p.path]?.started ? "App running" : "Launching…"}</span>`);
+      if (S.tools.flutter?.version) right.push(`<span class="sb">Flutter ${esc(S.tools.flutter.version)}</span>`);
+    }
     right.push(`<span class="sb">${ic("phone")}${esc(dev || "No device")}</span>`);
   }
   const live = p && S.previews[p.path];
   if (live) right.push(`<button class="sb ok" data-sb="preview">${ic("globe")}Preview live</button>`);
-  right.push(`<span class="sb">${{ agent: "Agent", editor: "Editor", android: "Android" }[S.mode || "agent"]} mode</span>`);
+  right.push(`<span class="sb">${{ agent: "Agent", editor: "Editor", android: p?.flutter ? "Flutter" : "Android" }[S.mode || "agent"]} mode</span>`);
   bar.innerHTML = `${left.join("")}<div class="spacer"></div>${right.join("")}`;
   bar.querySelector('[data-sb="git"]')?.addEventListener("click", () => { setMode("editor"); setView("git"); });
   bar.querySelector('[data-sb="proj"]')?.addEventListener("click", (e) => $("#btnProj").onclick(e));
@@ -1593,6 +1784,15 @@ $("#projFilter").oninput = renderProjects;
 // preview
 $("#webRoot").onchange = () => { const r = project()?.web?.find((x) => x.dir === $("#webRoot").value); $("#devCmd").value = r?.command || ""; };
 $("#btnPrevStart").onclick = act(async () => {
+  if (isFlutter()) {  // Flutter web: `flutter run -d web-server`, with hot reload / restart from Flutter mode
+    if (!project().flutter.platforms.includes("web")) throw new Error("This Flutter app has no web platform yet — add it in Flutter mode → Flutter tab → Platforms");
+    if (flRun()) throw new Error("The app is already running — stop it in Flutter mode first");
+    $("#prevLog").textContent = "";
+    await api("/api/flutter/run", { project: S.cur, device: "web-server", mode: "debug", auto: $("#flAuto").checked });
+    S.previews[S.cur] = { url: null, flutter: true };
+    $("#btnPrevStart").hidden = true; $("#btnPrevStop").hidden = false; $("#prevLogBox").open = true;
+    return toast("Building the Flutter web app… the first build takes a minute");
+  }
   const dir = $("#webRoot").value, command = $("#devCmd").value.trim();
   store.set(pkey("prev:" + S.cur), { dir, command });
   $("#prevLog").textContent = "";
@@ -1603,7 +1803,7 @@ $("#btnPrevStart").onclick = act(async () => {
   renderProjects();
 });
 $("#btnPrevStop").onclick = act(async () => {
-  await api("/api/preview/stop", { project: S.cur });
+  await api(S.previews[S.cur]?.flutter ? "/api/flutter/stop" : "/api/preview/stop", { project: S.cur });
   delete S.previews[S.cur];
   $("#btnPrevStart").hidden = false; $("#btnPrevStop").hidden = true; renderProjects();
 });
@@ -1622,7 +1822,11 @@ $("#autoReload").checked = store.get("fs:live", true);
 $("#autoReload").onchange = () => store.set("fs:live", $("#autoReload").checked);
 
 // android
-$("#deviceSel").onchange = () => { store.set("fs:serial", $("#deviceSel").value); renderStatusBar(); };
+$("#deviceSel").onchange = () => {
+  store.set(isFlutter() ? "fs:fdev" : "fs:serial", $("#deviceSel").value);
+  if (M.on && !serial()) stopMirror();
+  renderFlutterRun(); renderStatusBar();
+};
 $("#btnDevRefresh").onclick = act(refreshDevices);
 $("#btnAvd").onclick = act(async () => { await api("/api/android/emulator", { avd: $("#avdSel").value, project: S.cur }); toast("Emulator starting — press refresh in a moment"); setTimeout(act(refreshDevices), 15000); });
 $("#btnWifi").onclick = act(async () => {
@@ -1631,20 +1835,64 @@ $("#btnWifi").onclick = act(async () => {
 });
 $("#btnReverse").onclick = act(async () => { const r = await api("/api/android/reverse", { port: $("#revPort").value, serial: serial() }); toast(`Device localhost:${$("#revPort").value} → this computer (${r.output})`); });
 $("#btnStudio").onclick = act(async () => { await api("/api/android/studio", { project: S.cur }); toast("Opening in Android Studio…"); });
-const needDevice = () => { if (!serial()) throw new Error("Connect your phone (USB or Wi-Fi) or launch an emulator first"); };
+const needDevice = () => {
+  if (serial()) return;
+  throw new Error(isFlutter() ? "Pick an Android device for this (phone or emulator)" : "Connect your phone (USB or Wi-Fi) or launch an emulator first");
+};
 $("#btnRun").onclick = act(async () => {
+  if (isFlutter()) return flutterRun();
   needDevice();
   $("#andLog").textContent = ""; $("#btnFix").hidden = true; setDroidView("build");
   await api("/api/android/run", { project: S.cur, serial: serial(), module: $("#moduleSel").value, applicationId: appId(), logcat: true, variant: variant() });
   toast("Building and installing… logcat starts when the app launches");
 });
-$("#btnRestart").onclick = act(async () => { needDevice(); if (!appId()) throw new Error("No applicationId found"); await api("/api/android/restart", { project: S.cur, serial: serial(), applicationId: appId() }); });
-$("#btnBuild").onclick = act(() => gradleTask(`:${$("#moduleSel").value || "app"}:assemble${variant()}`));
+$("#btnHotReload").onclick = act(() => api("/api/flutter/reload", { project: S.cur }));
+$("#flAuto").checked = store.get("fs:flauto", true);
+$("#flAuto").onchange = act(async () => { store.set("fs:flauto", $("#flAuto").checked); if (flRun()) await api("/api/flutter/auto", { project: S.cur, on: $("#flAuto").checked }); });
+$$("#flDebug [data-ext]").forEach((b) => (b.onclick = act(async () => {
+  await api("/api/flutter/ext", { project: S.cur, name: b.dataset.ext, enabled: !b.classList.contains("on") });
+  b.classList.toggle("on");
+})));
+$("#btnDevtools").onclick = act(async () => {
+  toast("Starting DevTools…");
+  const r = await api("/api/flutter/devtools", { project: S.cur });
+  open(r.url, "_blank");
+});
+$("#btnFlTask").onclick = act(() => $("#flTask").value.trim() && flutterTask($("#flTask").value.trim()));
+$("#flTask").onkeydown = (e) => { if (e.key === "Enter") $("#btnFlTask").click(); };
+$("#btnFlPkg").onclick = act(async () => {
+  const pkgs = $("#flPkg").value.trim().split(/\s+/).filter(Boolean);
+  if (!pkgs.length) return;
+  if (pkgs.some((x) => !/^(dev:)?[a-z][a-z0-9_]*(:[\w.^<>=+-]+)?$/.test(x))) throw new Error("Package names look like http or dev:mockito (lowercase letters, digits and _)");
+  await flutterTask("pub add " + pkgs.join(" "));
+  $("#flPkg").value = "";
+});
+$("#flPkg").onkeydown = (e) => { if (e.key === "Enter") $("#btnFlPkg").click(); };
+$("#lcScope").onchange = () => { if (isFlutter()) store.set("fs:flscope", $("#lcScope").value); attachRunLog(); };
+$("#tileNewFlutter").onclick = openNewFlutter;
+$$("#nfTemplates .tpl").forEach((b) => (b.onclick = () => $$("#nfTemplates .tpl").forEach((x) => x.classList.toggle("active", x === b))));
+$("#newFlutterForm").onsubmit = (e) => {
+  if (e.submitter?.value !== "ok") return;
+  e.preventDefault();
+  act(async () => {
+    const platforms = $$("#nfPlatforms input").filter((c) => c.checked).map((c) => c.value);
+    if (!platforms.length) throw new Error("Pick at least one platform");
+    const r = await api("/api/flutter/new", { name: $("#nfName").value, org: $("#nfOrg").value.trim(), parent: $("#nfParent").value.trim(),
+      template: $("#nfTemplates .tpl.active").dataset.tpl, platforms });
+    store.set("fs:nforg", $("#nfOrg").value.trim()); store.set("fs:nfparent", $("#nfParent").value.trim());
+    $("#dlgNewFlutter").close();
+    S.pendingSelect = r.path;
+    toast(`Creating ${$("#nfName").value} with flutter create…`);
+  })();
+};
+$("#btnRestart").onclick = act(async () => {
+  if (isFlutter()) return api("/api/flutter/reload", { project: S.cur, full: true });
+  needDevice(); if (!appId()) throw new Error("No applicationId found"); await api("/api/android/restart", { project: S.cur, serial: serial(), applicationId: appId() }); });
+$("#btnBuild").onclick = act(() => isFlutter() ? flutterTask(`build ${flutterBuildTarget()} --${variant()}`) : gradleTask(`:${$("#moduleSel").value || "app"}:assemble${variant()}`));
 $$("#droidTabs button").forEach((b) => (b.onclick = () => setDroidView(b.dataset.dv)));
-$("#variantSel").onchange = () => { store.set("fs:variant", variant()); renderTaskChips(); };
-$("#variantSel").value = store.get("fs:variant", "Debug");
+$("#variantSel").onchange = () => { store.set(isFlutter() ? "fs:flmode" : "fs:variant", variant()); renderTaskChips(); renderFlutterRun(); };
 $("#moduleSel").onchange = renderTaskChips;
-$("#btnNewApp").onclick = openNewApp;
+$("#btnNewApp").onclick = () => (isFlutter() ? openNewFlutter() : openNewApp());
 $("#tileNewApp").onclick = openNewApp;
 $("#tileOpenApp").onclick = () => $("#btnAdd").click();
 $("#btnWrapper").onclick = act(async () => { setDroidView("build"); await api("/api/android/wrapper", { project: S.cur }); toast("Generating the Gradle wrapper…"); });
@@ -1666,7 +1914,9 @@ $("#newAppForm").onsubmit = (e) => {
 };
 $("#btnTask").onclick = act(() => $("#gradleTask").value.trim() && gradleTask($("#gradleTask").value.trim()));
 $("#gradleTask").onkeydown = (e) => { if (e.key === "Enter") $("#btnTask").click(); };
-$("#btnStopApp").onclick = act(async () => { if (!appId()) throw new Error("No applicationId found"); await api("/api/android/stop", { project: S.cur, serial: serial(), applicationId: appId() }); toast("App stopped"); });
+$("#btnStopApp").onclick = act(async () => {
+  if (isFlutter()) { await api("/api/flutter/stop", { project: S.cur }); return toast("Stopping the app…"); }
+  if (!appId()) throw new Error("No applicationId found"); await api("/api/android/stop", { project: S.cur, serial: serial(), applicationId: appId() }); toast("App stopped"); });
 $("#btnConsoleStop").onclick = act(() => S.consoleProc && api("/api/proc/kill", { id: S.consoleProc }));
 $("#btnConsoleClear").onclick = () => ($("#andLog").textContent = "");
 $("#btnShot").onclick = act(async () => {
@@ -1676,8 +1926,12 @@ $("#btnShot").onclick = act(async () => {
 $("#btnShotClose").onclick = () => ($("#shotBox").hidden = true);
 $("#btnFix").onclick = act(async () => {
   const lines = S.procLogs[S.lastGradle?.proc] || [];
-  const idx = lines.findIndex((l) => /FAILURE:|What went wrong|^e: |error:/.test(l));
+  const idx = lines.findIndex((l) => /FAILURE:|What went wrong|^e: |error:|^\s*error •|Error: /.test(l));
   const excerpt = lines.slice(Math.max(0, idx < 0 ? lines.length - 120 : idx - 30)).slice(0, 160).join("\n");
+  if (/^(flutter|dart) /.test(S.lastGradle.label)) {
+    await send(`The Flutter command \`${S.lastGradle.label}\` failed. Please find the cause and fix it, then tell me what you changed.\n\n\`\`\`\n${excerpt}\n\`\`\``);
+    return ($("#btnFix").hidden = true);
+  }
   await send(`The Android Gradle task \`${S.lastGradle.label}\` failed. Please find the cause and fix it, then tell me what you changed.\n\n\`\`\`\n${excerpt}\n\`\`\``);
   $("#btnFix").hidden = true;
 });
@@ -1697,14 +1951,16 @@ $("#btnLcClear").onclick = act(async () => { LC.lines = []; lcRender(); if (seri
 $("#btnLcAsk").onclick = () => {
   const vis = LC.lines.filter(lcVisible).slice(-150);
   if (!vis.length) return toast("No log lines to send yet", true);
-  $("#prompt").value = `Here is recent logcat output from my Android app${appId() ? ` (${appId()})` : ""}. What's going wrong and how do I fix it?\n\n\`\`\`\n${logcatText(vis)}\n\`\`\``;
+  $("#prompt").value = `Here is recent ${LC.flutter ? "output from my Flutter app" : `logcat output from my ${isFlutter() ? "Flutter" : "Android"} app`}${appId() ? ` (${appId()})` : ""}. What's going wrong and how do I fix it?\n\n\`\`\`\n${logcatText(vis)}\n\`\`\``;
   $("#prompt").focus(); $("#prompt").setSelectionRange(0, 0); $("#prompt").scrollTop = 0;
   toast("Log added to the message box — add your question and press Send");
 };
 $("#btnCrashClose").onclick = () => ($("#crashBar").hidden = true);
 $("#btnCrashFix").onclick = act(async () => {
   const trace = LC.crash?.lines.join("\n") || logcatText(LC.lines.filter((l) => LVL[l.lvl] >= 4).slice(-80));
-  await send(`My Android app${appId() ? ` (${appId()})` : ""} crashed while I was using it. Here is the crash from logcat. Find the cause in the code and fix it, then tell me what you changed.\n\n\`\`\`\n${trace}\n\`\`\``);
+  if (LC.crash?.run) await send(`\`flutter run\` failed for my Flutter app. Here is the end of its output. Find the cause and fix it, then tell me what you changed.\n\n\`\`\`\n${trace}\n\`\`\``);
+  else if (LC.flutter) await send(`My Flutter app threw this error while I was using it. Find the cause in the code and fix it, then tell me what you changed.\n\n\`\`\`\n${trace}\n\`\`\``);
+  else await send(`My Android app${appId() ? ` (${appId()})` : ""} crashed while I was using it. Here is the crash from logcat. Find the cause in the code and fix it, then tell me what you changed.\n\n\`\`\`\n${trace}\n\`\`\``);
   $("#crashBar").hidden = true;
 });
 $("#btnMirror").onclick = () => {
