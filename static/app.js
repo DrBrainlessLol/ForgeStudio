@@ -649,6 +649,7 @@ function renderTools() {
 async function selectProject(path) {
   S.cur = path || null;
   store.set(pkey("cur"), S.cur);
+  try { sessionStorage.setItem(pkey("cur"), S.cur || ""); } catch {}  // each browser tab remembers its own project
   const p = project();
   $("#crumb").textContent = p ? p.name : "Open a project";
   document.title = p ? `${p.name} — Forge Studio` : "Forge Studio";
@@ -1268,7 +1269,9 @@ async function refreshDevices() {
 }
 async function gradleTask(task) {
   $("#andLog").textContent = ""; $("#btnFix").hidden = true; setDroidView("build");
+  const name = project()?.name;
   await api("/api/android/gradle", { project: S.cur, task, serial: serial() });
+  toast(`${name}: ./gradlew ${task}`);
 }
 
 // logcat viewer
@@ -1459,11 +1462,15 @@ function devicePoint(e) {
 }
 
 // ============================================================ processes
+// Processes shows the current project's jobs (plus global ones like emulators / setup) unless "All projects" is on
+const procVisible = (pr) => $("#procAll").checked || !S.cur || !pr.project || pr.project === S.cur;
 function renderProcs() {
-  const ul = $("#procList");
+  const ul = $("#procList"), list = S.procs.filter(procVisible), name = project()?.name;
   ul.innerHTML = "";
-  if (!S.procs.length) ul.innerHTML = '<li class="dim">No processes yet. Dev servers, Gradle builds, logcat and emulators show up here.</li>';
-  for (const pr of [...S.procs].reverse()) {
+  $("#procScope").textContent = $("#procAll").checked || !name ? "Jobs from all projects" : `Jobs for ${name}`;
+  if (!list.length) ul.innerHTML = `<li class="dim">No processes ${name && !$("#procAll").checked ? `for ${esc(name)} ` : ""}yet. Dev servers, builds, logcat and emulators show up here.</li>`;
+  if (S.viewProc && !list.some((x) => x.id === S.viewProc)) { S.viewProc = null; $("#procLog").textContent = ""; }
+  for (const pr of [...list].reverse()) {
     const li = document.createElement("li");
     li.innerHTML = `<span class="dot ${pr.running ? "on" : ""}"></span><span class="plabel">${esc(pr.label)}</span><span class="dim">${esc((pr.project || "").split("/").pop())}</span>${pr.running ? '<button class="btn small danger">Stop</button>' : ""}`;
     li.onclick = act(() => { S.viewProc = pr.id; return loadLog(pr.id, $("#procLog")); });
@@ -1640,6 +1647,8 @@ function toggleRight() {
   $("#btnAgent").classList.toggle("on", !l.classList.contains("no-agent"));
 }
 $("#btnTogglePanel").onclick = toggleRight;
+$("#procAll").checked = store.get("fs:procAll", false);
+$("#procAll").onchange = () => { store.set("fs:procAll", $("#procAll").checked); renderProcs(); };
 $("#btnAgent").onclick = toggleRight;
 if (store.get("fs:nopanel", false)) $("#layout").classList.add("no-panel");
 if (store.get("fs:noagent", false)) $("#layout").classList.add("no-agent");
@@ -1843,8 +1852,9 @@ $("#btnRun").onclick = act(async () => {
   if (isFlutter()) return flutterRun();
   needDevice();
   $("#andLog").textContent = ""; $("#btnFix").hidden = true; setDroidView("build");
-  await api("/api/android/run", { project: S.cur, serial: serial(), module: $("#moduleSel").value, applicationId: appId(), logcat: true, variant: variant() });
-  toast("Building and installing… logcat starts when the app launches");
+  const proj = S.cur, name = project()?.name;  // pinned now, so a project switch mid-request can't redirect it
+  await api("/api/android/run", { project: proj, serial: serial(), module: $("#moduleSel").value, applicationId: appId(), logcat: true, variant: variant() });
+  toast(`Building and installing ${name} (${variant().toLowerCase()})… logcat starts when the app launches`);
 });
 $("#btnHotReload").onclick = act(() => api("/api/flutter/reload", { project: S.cur }));
 $("#flAuto").checked = store.get("fs:flauto", true);
@@ -2039,7 +2049,7 @@ $("#dlgAdd").onclose = act(async () => {
   showTab(tab);
   setDroidView(store.get("fs:droidView", "run"));
   setMode(store.get("fs:mode", tab === "code" || store.get("fs:code", false) ? "editor" : "agent"), false);
-  let start = store.get(pkey("cur"), null);
+  let start = (() => { try { return sessionStorage.getItem(pkey("cur")); } catch { return null; } })() || store.get(pkey("cur"), null);
   if (hashProject) {
     try { start = (await api("/api/projects/add", { path: hashProject })).path; await loadState(); } catch (e) { toast(e.message, true); }
   }
