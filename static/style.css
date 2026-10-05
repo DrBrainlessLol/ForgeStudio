@@ -838,3 +838,7 @@ body:not([data-mode="agent"]) .layout.no-agent .chat, body:not([data-mode="agent
 .wordmark img { display: block; width: min(280px, 80%); height: auto; margin: 4px auto 0; }
 .wordmark .wm-light, [data-theme="light"] .wordmark .wm-dark { display: none; }
 [data-theme="light"] .wordmark .wm-light { display: block; }
+/* "> quotes" in chat messages */
+.msg blockquote { margin: 6px 0; padding: 2px 0 2px 12px; border-left: 3px solid var(--accent-ring); color: var(--text); }
+.msg blockquote p { margin: .35em 0; }
+.msg blockquote blockquote { margin-left: 2px; }

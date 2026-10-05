@@ -128,33 +128,42 @@ function md(src) {
     .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>")
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
     .replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
-  const out = [];
-  let list = null, para = [];
-  const flushP = () => { if (para.length) { out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; } };
-  const flushL = () => { if (list) { out.push(`<${list.t}>${list.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${list.t}>`); list = null; } };
-  const lines = s.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    let m;
-    if (/^\u0000\d+\u0000$/.test(line.trim())) { flushP(); flushL(); out.push(line.trim()); continue; }
-    if ((m = line.match(/^(#{1,4})\s+(.*)/))) { flushP(); flushL(); out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); continue; }
-    if ((m = line.match(/^\s*([-*]|\d+\.)\s+(.*)/))) {
-      flushP(); const t = /\d/.test(m[1]) ? "ol" : "ul";
-      if (!list || list.t !== t) { flushL(); list = { t, items: [] }; }
-      list.items.push(m[2]); continue;
+  // block-level rendering; recursive so "> " quotes can contain paragraphs and lists
+  const render = (lines) => {
+    const out = [];
+    let list = null, para = [];
+    const flushP = () => { if (para.length) { out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; } };
+    const flushL = () => { if (list) { out.push(`<${list.t}>${list.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${list.t}>`); list = null; } };
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      let m;
+      if (/^\u0000\d+\u0000$/.test(line.trim())) { flushP(); flushL(); out.push(line.trim()); continue; }
+      if (/^\s*&gt;/.test(line)) {  // "> quote" lines (escaped above)
+        flushP(); flushL();
+        const q = [];
+        while (i < lines.length && /^\s*&gt;/.test(lines[i])) q.push(lines[i++].replace(/^\s*&gt; ?/, ""));
+        i--; out.push(`<blockquote>${render(q)}</blockquote>`); continue;
+      }
+      if ((m = line.match(/^(#{1,4})\s+(.*)/))) { flushP(); flushL(); out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); continue; }
+      if ((m = line.match(/^\s*([-*]|\d+\.)\s+(.*)/))) {
+        flushP(); const t = /\d/.test(m[1]) ? "ol" : "ul";
+        if (!list || list.t !== t) { flushL(); list = { t, items: [] }; }
+        list.items.push(m[2]); continue;
+      }
+      if (/^\|.*\|\s*$/.test(line) && /^\|[\s:|-]+\|\s*$/.test(lines[i + 1] || "")) {
+        flushP(); flushL();
+        const row = (l, tag) => "<tr>" + l.trim().slice(1, -1).split("|").map((c) => `<${tag}>${inline(c.trim())}</${tag}>`).join("") + "</tr>";
+        let html = "<table>" + row(line, "th"); i += 2;
+        while (i < lines.length && /^\|.*\|\s*$/.test(lines[i])) html += row(lines[i++], "td");
+        i--; out.push(html + "</table>"); continue;
+      }
+      if (!line.trim()) { flushP(); flushL(); continue; }
+      flushL(); para.push(line);
     }
-    if (/^\|.*\|\s*$/.test(line) && /^\|[\s:|-]+\|\s*$/.test(lines[i + 1] || "")) {
-      flushP(); flushL();
-      const row = (l, tag) => "<tr>" + l.trim().slice(1, -1).split("|").map((c) => `<${tag}>${inline(c.trim())}</${tag}>`).join("") + "</tr>";
-      let html = "<table>" + row(line, "th"); i += 2;
-      while (i < lines.length && /^\|.*\|\s*$/.test(lines[i])) html += row(lines[i++], "td");
-      i--; out.push(html + "</table>"); continue;
-    }
-    if (!line.trim()) { flushP(); flushL(); continue; }
-    flushL(); para.push(line);
-  }
-  flushP(); flushL();
-  return out.join("").replace(/\u0000(\d+)\u0000/g, (_, n) => blocks[n]);
+    flushP(); flushL();
+    return out.join("");
+  };
+  return render(s.split("\n")).replace(/\u0000(\d+)\u0000/g, (_, n) => blocks[n]);
 }
 const HOME = () => (S.projects[0]?.path.match(/^\/home\/[^/]+/) || [""])[0];
 
