@@ -834,3 +834,7 @@ body:not([data-mode="agent"]) .layout.no-agent .chat, body:not([data-mode="agent
 #flDebug .chip { height: 26px; padding: 0 10px; font-size: .9em; }
 #nfPlatforms { margin-top: 6px; gap: 14px; }
 #nfPlatforms .check { color: var(--text); }
+/* wordmark: white "Forge" on dark themes, dark "Forge" on light */
+.wordmark img { display: block; width: min(280px, 80%); height: auto; margin: 4px auto 0; }
+.wordmark .wm-light, [data-theme="light"] .wordmark .wm-dark { display: none; }
+[data-theme="light"] .wordmark .wm-light { display: block; }

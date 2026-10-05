@@ -1,6 +1,6 @@
 // Forge Studio service worker: makes the app installable and keeps the shell available offline.
-const CACHE = "forge-shell-v4";
-const SHELL = ["/", "/style.css", "/app.js", "/code.js", "/icons.svg", "/logo.png", "/favicon-32.png", "/manifest.webmanifest"];
+const CACHE = "forge-shell-v5";
+const SHELL = ["/", "/style.css", "/app.js", "/code.js", "/icons.svg", "/logo.png", "/favicon-32.png", "/wordmark-dark-theme.png", "/wordmark-light-theme.png", "/manifest.webmanifest"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener("fetch", (e) => {
