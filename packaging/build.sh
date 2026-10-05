@@ -21,7 +21,6 @@ stage_app() {  # $1 = prefix dir (e.g. .../usr)
   find "$u/lib/forge-studio" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
   install -d "$u/bin"; ln -sf /usr/lib/forge-studio/forge-studio "$u/bin/forge-studio"
   install -Dm644 "$HERE/forge-studio.desktop" "$u/share/applications/forge-studio.desktop"
-  install -Dm644 "$HERE/icons/scalable.svg" "$u/share/icons/hicolor/scalable/apps/forge-studio.svg"
   local s; for s in 16 24 32 48 64 128 256 512; do
     install -Dm644 "$HERE/icons/$s.png" "$u/share/icons/hicolor/${s}x${s}/apps/forge-studio.png"
   done
@@ -110,7 +109,6 @@ cp "$SRC/server.py" "$APP/"; cp -r "$SRC/static" "$APP/"
 cp "$SRC/forge-studio" "$APP/"; chmod 755 "$APP/forge-studio"
 install -d "$PREFIX/bin"; ln -sf "$APP/forge-studio" "$PREFIX/bin/forge-studio"
 install -Dm644 "$SRC/forge-studio.desktop" "$PREFIX/share/applications/forge-studio.desktop"
-install -Dm644 "$SRC/icons/scalable.svg" "$PREFIX/share/icons/hicolor/scalable/apps/forge-studio.svg"
 for s in 16 24 32 48 64 128 256 512; do
   install -Dm644 "$SRC/icons/$s.png" "$PREFIX/share/icons/hicolor/${s}x${s}/apps/forge-studio.png"
 done

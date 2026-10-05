@@ -339,7 +339,7 @@ function renderChat() {
   $("#agentPill").textContent = S.agents.find((a) => a.id === ag)?.name || "";
   if (!S.cur) {
     $("#chatPane").classList.remove("home"); $("#homeChips").hidden = true;
-    box.innerHTML = `<div class="empty"><img src="icon.svg" alt=""><h2>Welcome to Forge Studio</h2><p>Pick a project in the sidebar, or start one below. Switch between <b>Agent</b>, <b>Editor</b> and <b>Android</b> / <b>Flutter</b> at the top — the agent comes with you.</p>
+    box.innerHTML = `<div class="empty"><img src="logo.png" alt=""><h2>Welcome to Forge Studio</h2><p>Pick a project in the sidebar, or start one below. Switch between <b>Agent</b>, <b>Editor</b> and <b>Android</b> / <b>Flutter</b> at the top — the agent comes with you.</p>
       <div class="tiles" id="welcomeTiles">
         <div class="tile" data-w="open">${ic("folder")}<span class="label">Open Project</span></div>
         <div class="tile" data-w="clone">${ic("clone")}<span class="label">Clone Repo</span></div>
@@ -1726,7 +1726,7 @@ function homeChips() {
 }
 function renderHome(box) {
   const first = (S.profile?.name || "").split(" ")[0];
-  box.innerHTML = `<div class="home-hero"><img src="icon.svg" alt=""><h1>Hello${first ? " " + esc(first) : ""}, welcome back!</h1>
+  box.innerHTML = `<div class="home-hero"><img src="logo.png" alt=""><h1>Hello${first ? " " + esc(first) : ""}, welcome back!</h1>
     <h2>What should we build in <b>${esc(project()?.name)}</b>?</h2></div>`;
   const chips = $("#homeChips");
   chips.innerHTML = homeChips().map((t) => `<button class="chip">${ic("bot")}<span>${esc(t)}</span></button>`).join("");

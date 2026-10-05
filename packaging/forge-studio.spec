@@ -23,7 +23,6 @@ chmod 755 %{buildroot}/usr/lib/forge-studio/forge-studio
 mkdir -p %{buildroot}/usr/bin
 ln -s /usr/lib/forge-studio/forge-studio %{buildroot}/usr/bin/forge-studio
 install -Dm644 forge-studio.desktop %{buildroot}/usr/share/applications/forge-studio.desktop
-install -Dm644 icons/scalable.svg %{buildroot}/usr/share/icons/hicolor/scalable/apps/forge-studio.svg
 for s in 16 24 32 48 64 128 256 512; do
   install -Dm644 icons/${s}.png %{buildroot}/usr/share/icons/hicolor/${s}x${s}/apps/forge-studio.png
 done

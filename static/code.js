@@ -446,7 +446,7 @@ function welcomeEl() {
     ["branch", "Source Control", () => setView("git")],
     ["bot", "Ask the agent", () => { $("#prompt")?.focus(); }, true],
   ];
-  el.innerHTML = `<img src="icon.svg" alt=""><h1>Forge Studio</h1><div class="sub">${esc(project()?.name || "")}</div>`;
+  el.innerHTML = `<img src="logo.png" alt=""><h1>Forge Studio</h1><div class="sub">${esc(project()?.name || "")}</div>`;
   const grid = document.createElement("div"); grid.className = "tiles";
   for (const [icn, label, fn, hot] of tiles) {
     const tl = document.createElement("div"); tl.className = "tile" + (hot ? " hot" : "");

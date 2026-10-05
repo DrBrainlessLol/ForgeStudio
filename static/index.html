@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <title>Forge Studio</title>
-<link rel="icon" href="icon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="style.css">
 <script>
@@ -23,7 +25,7 @@
 <!-- ============ SIGN IN ============ -->
 <div class="login" id="login" hidden>
   <div class="login-card">
-    <img class="login-logo" src="icon.svg" alt="">
+    <img class="login-logo" src="logo.png" alt="">
     <h1>Forge Studio</h1>
     <p class="dim">Sign in to keep your chats, history and keys separate from other people using this computer.</p>
 
@@ -69,7 +71,7 @@
 <!-- ============ WINDOW ============ -->
 <header class="titlebar">
   <button class="tb-btn" id="btnSidebar" title="Show / hide sidebar"><svg class="ic"><use href="#i-sidebar"/></svg></button>
-  <div class="tb-title"><img src="icon.svg" alt=""><span>Forge Studio</span></div>
+  <div class="tb-title"><img src="logo.png" alt=""><span>Forge Studio</span></div>
   <button class="tb-proj" id="btnProj" title="Switch project"><svg class="ic"><use href="#i-folder"/></svg><span id="crumb">Open a project</span><svg class="ic chev"><use href="#i-chevron"/></svg></button>
   <nav class="modes" id="modes">
     <button data-mode="agent" title="Agent — chat with the agent, previews and tasks (Ctrl+1)"><svg class="ic"><use href="#i-bot"/></svg> Agent</button>
@@ -660,7 +662,7 @@
 
       <section data-sec="about" hidden>
         <h2>About</h2>
-        <div class="about"><img src="icon.svg" alt=""><div><b>Forge Studio</b><div class="dim">A desktop studio for AI coding agents — chat, live preview, and Android build &amp; debug tools. Runs locally on this computer.</div></div></div>
+        <div class="about"><img src="logo.png" alt=""><div><b>Forge Studio</b><div class="dim">A desktop studio for AI coding agents — chat, live preview, and Android build &amp; debug tools. Runs locally on this computer.</div></div></div>
         <h4>What agents can make</h4>
         <p class="dim">Agents can write code, documents (Markdown, HTML, PDF/DOCX via scripts), spreadsheets, diagrams and SVG graphics, and anything a script can produce. Files they create show up with Open / Download buttons in the chat. Claude models don't generate photos or videos themselves; for that, add a CLI or script that calls an image/video API.</p>
       </section>
