@@ -1,6 +1,6 @@
 # Maintainer: Forge Studio
 pkgname=forge-studio
-pkgver=1.1.0
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Lightweight studio for AI coding agents with an editor, website preview and Android tools"
 arch=('any')
