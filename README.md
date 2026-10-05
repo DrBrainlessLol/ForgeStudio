@@ -130,6 +130,9 @@ Settings → Plugins installs plugins from a folder or a Git URL, or scaffolds a
 - Data lives in `~/.config/forge-studio/`: token, config, and `profiles/<id>/` with chats, uploads and keys (mode 600).
 - Server log: `~/.config/forge-studio/server.log`. Port: `FORGE_STUDIO_PORT` (default 8765; LAN uses +1).
 
+## Support Forge Studio
+Forge Studio is free and open source, built and maintained by one developer. If it saves you time, you can support its development on **[Ko-fi](https://ko-fi.com/forgestudio)**. It helps keep new features, Android/Flutter tooling and fixes coming. Starring the repo, reporting bugs and sharing it help too.
+
 ## License
 Copyright © 2026 DrBrainlessLol.
 
