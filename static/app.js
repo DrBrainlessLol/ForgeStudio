@@ -114,17 +114,32 @@ async function setPref(patch) {
 }
 
 // ============================================================ markdown (small, safe)
+async function copyText(text, btn) {
+  try {
+    let ok = false;
+    if (navigator.clipboard && isSecureContext) ok = await navigator.clipboard.writeText(text).then(() => true, () => false);
+    if (!ok) {  // plain-HTTP LAN access, or the clipboard API refused: fall back to a hidden textarea
+      const ta = Object.assign(document.createElement("textarea"), { value: text });
+      ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.append(ta); ta.select(); document.execCommand("copy"); ta.remove();
+    }
+    if (btn) { btn.classList.add("copied"); setTimeout(() => btn.classList.remove("copied"), 1200); }
+    else toast("Copied");
+  } catch { toast("Copy failed", true); }
+}
 function md(src) {
   const blocks = [];
-  let s = String(src).replace(/```([\w+-]*)\n?([\s\S]*?)(```|$)/g, (_, lang, code) => {
-    blocks.push(`<pre><code>${esc(code.replace(/\n$/, ""))}</code></pre>`);
-    return `\u0000${blocks.length - 1}\u0000`;
+  // fences only count at the start of a line (prose that mentions ``` must not open a code block)
+  let s = String(src).replace(/(^|\n)[ \t]*```([\w+#.-]*)[^\n]*\n([\s\S]*?)(?:\n[ \t]*```[ \t]*(?=\n|$)|$)/g, (_, pre, lang, code) => {
+    blocks.push(`<div class="codeblock"><div class="cb-head"><span>${esc(lang || "text")}</span><button class="cb-copy" title="Copy">${ic("copy")}<span>Copy</span></button></div>`
+      + `<pre><code>${esc(code.replace(/\n$/, ""))}</code></pre></div>`);
+    return `${pre}\u0000${blocks.length - 1}\u0000`;
   });
   s = esc(s);
   const inline = (t) => t
     .replace(/`([^`\n]+)`/g, (_, c) => /^(\/|~\/)[^\s]*\.[A-Za-z0-9]{1,6}$/.test(c)
       ? `<code>${c}</code><a class="dl" title="Download" href="${fileUrl(c.replace(/^~/, HOME()), true)}">${ic("download")}</a>` : `<code>${c}</code>`)
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/~~([^~\n]+)~~/g, "<del>$1</del>")
     .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>")
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
     .replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
@@ -133,7 +148,11 @@ function md(src) {
     const out = [];
     let list = null, para = [];
     const flushP = () => { if (para.length) { out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; } };
-    const flushL = () => { if (list) { out.push(`<${list.t}>${list.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${list.t}>`); list = null; } };
+    const li = (i) => {
+      const m = i.match(/^\[([ xX])\]\s+(.*)/);  // "- [ ] todo" / "- [x] done"
+      return m ? `<li class="task"><input type="checkbox" disabled${m[1] !== " " ? " checked" : ""}> ${inline(m[2])}</li>` : `<li>${inline(i)}</li>`;
+    };
+    const flushL = () => { if (list) { out.push(`<${list.t}>${list.items.map(li).join("")}</${list.t}>`); list = null; } };
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       let m;
@@ -144,7 +163,8 @@ function md(src) {
         while (i < lines.length && /^\s*&gt;/.test(lines[i])) q.push(lines[i++].replace(/^\s*&gt; ?/, ""));
         i--; out.push(`<blockquote>${render(q)}</blockquote>`); continue;
       }
-      if ((m = line.match(/^(#{1,4})\s+(.*)/))) { flushP(); flushL(); out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); continue; }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flushP(); flushL(); out.push("<hr>"); continue; }
+      if ((m = line.match(/^(#{1,6})\s+(.*)/))) { flushP(); flushL(); out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); continue; }
       if ((m = line.match(/^\s*([-*]|\d+\.)\s+(.*)/))) {
         flushP(); const t = /\d/.test(m[1]) ? "ol" : "ul";
         if (!list || list.t !== t) { flushL(); list = { t, items: [] }; }
@@ -202,7 +222,26 @@ function renderItem(it) {
       el.append(f);
     }
     if (it.text) { const b = document.createElement("div"); b.className = "bubble"; b.textContent = it.text; el.append(b); }
-  } else if (it.k === "text") { el = document.createElement("div"); el.className = "msg assistant" + (it.sub ? " sub" : ""); el.innerHTML = md(it.text); }
+  } else if (it.k === "text") {
+    el = document.createElement("div"); el.className = "msg assistant" + (it.sub ? " sub" : ""); el.innerHTML = md(it.text);
+    if (it.text.trim()) {
+      const b = document.createElement("button");
+      b.className = "msg-copy"; b.title = "Copy message (Markdown)"; b.innerHTML = ic("copy");
+      b.onclick = () => copyText(it.text, b);
+      el.append(b);
+    }
+  } else if (it.k === "think") {
+    // collapsed by default like other agents' "Thinking…"; the body is only built when opened (long chats stay light)
+    el = document.createElement("details"); el.className = "think" + (it.sub ? " sub" : "") + (it.done ? "" : " live");
+    const secs = it.ms != null ? Math.max(1, Math.round(it.ms / 1000)) : null;
+    el.innerHTML = `<summary>${ic("bot")}<span>${it.done ? `Thought${secs ? ` for ${secs < 60 ? secs + "s" : Math.floor(secs / 60) + "m " + (secs % 60) + "s"}` : ""}` : "Thinking…"}</span>${ic("chevron")}</summary>`;
+    const fill = () => {
+      el.querySelector(".think-body")?.remove();
+      el.insertAdjacentHTML("beforeend", `<div class="think-body">${md(it.text || "…")}</div>`);
+    };
+    if (it._open) { el.open = true; fill(); }
+    el.ontoggle = () => { it._open = el.open; if (el.open) fill(); };
+  }
   else if (it.k === "tool") {
     el = document.createElement("details"); el.className = "tool";
     if (it._open) el.open = true;
@@ -286,6 +325,20 @@ function applyEvent(items, ev) {
     case "user": push({ k: "user", text: ev.text, files: ev.files }); break;
     case "text": push({ k: "text", text: ev.text, sub: ev.sub }); break;
     case "text_start": push({ k: "text", text: "", sub: ev.sub }); break;
+    // the agent's thinking: streamed live (think_start/delta/end), saved in the log as one "thinking" event
+    case "think_start": push({ k: "think", text: "", sub: ev.sub, t0: Date.now() }); break;
+    case "think_delta": {
+      const it = last && last.k === "think" && !last.done ? last : push({ k: "think", text: "", sub: ev.sub, t0: Date.now() });
+      it.text += ev.text;
+      if (!pushed.includes(it)) changed.push(it);
+      break;
+    }
+    case "think_end": {
+      const it = [...items].reverse().find((i) => i.k === "think" && !i.done);
+      if (it) { it.done = true; it.ms = ev.ms; changed.push(it); }
+      break;
+    }
+    case "thinking": push({ k: "think", text: ev.text, sub: ev.sub, ms: ev.ms, done: true }); break;
     case "delta": {
       let it = last && last.k === "text" && !!last.sub === !!ev.sub ? last : push({ k: "text", text: "", sub: ev.sub });
       it.text += ev.text;
@@ -330,6 +383,7 @@ function applyEvent(items, ev) {
     }
     case "ui_end":
       for (const it of items) {
+        if (it.k === "think" && !it.done) { it.done = true; it.ms ??= it.t0 ? Date.now() - it.t0 : null; changed.push(it); }
         if (it.k === "tool" && it.result == null) { it.result = "(interrupted)"; changed.push(it); }
         if (it.k === "approval" && !it.decision) { it.decision = "cancelled"; changed.push(it); }
       }
@@ -414,6 +468,7 @@ function onChat(cid, projectPath, ev) {
       if (box.scrollHeight - box.scrollTop - box.clientHeight < 400) box.scrollTop = box.scrollHeight;
     });
     if (stick || ev.type === "approval") box.scrollTop = box.scrollHeight;
+    refreshTyping();
   }
   const openIt = () => act(async () => { if (S.cur !== projectPath) await selectProject(projectPath); await openChat(cid); })();
   if (ev.type === "approval") {
@@ -441,8 +496,36 @@ function updateBusy() {
   $("#btnStop").hidden = !busy;
   $("#btnSend").disabled = !S.cur || busy;
   $("#typing")?.remove();
-  if (busy) { const t = document.createElement("div"); t.id = "typing"; t.className = "typing"; t.textContent = "Working…"; $("#messages").append(t); }
+  if (busy) {
+    const t = document.createElement("button"); t.id = "typing"; t.className = "typing"; t.title = "Show what the agent is doing";
+    t.onclick = () => {
+      const it = currentStep(cid);
+      if (!it?.el?.isConnected) return;
+      if (it.el.tagName === "DETAILS") it.el.open = true;
+      it.el.scrollIntoView({ block: "center", behavior: "smooth" });
+    };
+    $("#messages").append(t);
+    refreshTyping();
+  }
   renderProjects();
+}
+// the newest step that's still in progress (thinking, a running tool, an approval, or the reply being written)
+function currentStep(cid) {
+  const items = S.items[cid] || [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if ((it.k === "think" && !it.done) || (it.k === "tool" && it.result == null) || (it.k === "approval" && !it.decision)) return it;
+    if (it.k === "text" || it.k === "user") return it.k === "text" ? it : null;
+  }
+  return null;
+}
+function refreshTyping() {
+  const t = $("#typing");
+  if (!t) return;
+  const it = currentStep(chatId());
+  const what = !it ? "Working…" : it.k === "think" ? "Thinking…" : it.k === "approval" ? "Waiting for your approval"
+    : it.k === "text" ? "Writing…" : `${it.name === "Bash" ? "Running" : it.name}: ${toolArg(it.input).replace(/\s+/g, " ").slice(0, 70)}…`;
+  t.textContent = what;
 }
 async function openChat(cid) {
   if (!S.cur) return;
@@ -1775,6 +1858,13 @@ function renderStatusBar() {
 }
 
 // ============================================================ wiring: chat
+// copy buttons on code blocks (in replies, thinking and anywhere md() renders); one listener for the whole chat
+$("#messages").addEventListener("click", (e) => {
+  const b = e.target.closest(".cb-copy");
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  copyText(b.closest(".codeblock").querySelector("code").textContent, b);
+});
 $("#composer").onsubmit = (e) => { e.preventDefault(); act(send)(); };
 $("#prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); act(send)(); } };
 $("#prompt").oninput = () => { const t = $("#prompt"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, innerHeight * 0.4) + "px"; };

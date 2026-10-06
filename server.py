@@ -786,6 +786,7 @@ class Run:
         self.always = set()
         self.lock = threading.Lock()
         self.text_buf = {"text": "", "sub": False}
+        self.think_buf = {"text": "", "sub": False, "t0": None}
 
     # -- plumbing
     def send(self, ev, log=True):
@@ -798,7 +799,24 @@ class Run:
             self.prof.append(self.cid, {"type": "text", "text": self.text_buf["text"], "sub": self.text_buf["sub"]})
             self.text_buf["text"] = ""
 
+    def think(self, text, sub=False):
+        tb = self.think_buf
+        if tb["t0"] is None:
+            tb["t0"], tb["sub"] = time.time(), sub
+        tb["text"] += text
+        self.send({"type": "think_delta", "text": text, "sub": sub}, log=False)
+
+    def flush_think(self):
+        tb = self.think_buf
+        if tb["t0"] is not None:
+            ms = int((time.time() - tb["t0"]) * 1000)
+            if tb["text"].strip():
+                self.prof.append(self.cid, {"type": "thinking", "text": tb["text"], "sub": tb["sub"], "ms": ms})
+            self.send({"type": "think_end", "ms": ms, "sub": tb["sub"]}, log=False)
+        tb.update(text="", t0=None)
+
     def delta(self, text, sub=False):
+        self.flush_think()
         if self.text_buf["text"] and self.text_buf["sub"] != sub:
             self.flush()
         self.text_buf["text"] += text
@@ -806,6 +824,7 @@ class Run:
         self.send({"type": "delta", "text": text, "sub": sub}, log=False)
 
     def event(self, ev):
+        self.flush_think()
         self.flush()
         self.send(ev, log=ev["type"] not in ("text_start", "retry"))
 
@@ -853,6 +872,7 @@ class Run:
             code, err = target()
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
+        self.flush_think()
         self.flush()
         for aid in [k for k, v in APPROVALS.items() if v["run"] is self]:
             APPROVALS.pop(aid, None)
@@ -874,8 +894,11 @@ class Run:
 
     # -- Claude Code (native: streaming, approvals, images, providers)
     def run_claude(self):
-        cmd = [shutil.which("claude", path=tool_env()["PATH"]), "-p", "--input-format", "stream-json",
+        exe = shutil.which("claude", path=tool_env()["PATH"])
+        cmd = [exe, "-p", "--input-format", "stream-json",
                "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
+        if claude_supports(exe, "--thinking-display"):
+            cmd += ["--thinking-display", "summarized"]  # headless mode otherwise sends empty thinking blocks
         mode = self.mode or "acceptEdits"
         if mode == "ask":
             cmd += ["--permission-mode", "default", "--permission-prompt-tool", "stdio"]
@@ -918,6 +941,13 @@ class Run:
                 continue
             if slim["type"] == "delta":
                 self.delta(slim["text"], slim["sub"])
+            elif slim["type"] == "think_delta":
+                self.think(slim["text"], slim["sub"])
+            elif slim["type"] == "think_start":
+                self.flush_think()
+                self.flush()
+                self.think_buf.update(t0=time.time(), sub=slim["sub"])
+                self.send(slim, log=False)
             elif slim["type"] == "retry" and slim["status"] in (401, 403) and slim["attempt"] >= 2:
                 who = self.prov["name"] if self.prov else "Claude"
                 self.event({"type": "ui_raw", "err": True, "text": f"{who} rejected the login / API key (HTTP {slim['status']}). "
@@ -1379,6 +1409,31 @@ def trim_event(ev):
     return cut(ev) if ev.get("type") in ("tools", "tool_results", "approval") else ev
 
 
+_claude_flags = {}
+
+
+def claude_supports(exe, flag):
+    """Whether this Claude Code build knows a CLI flag (some aren't listed in --help). Cached per binary version."""
+    try:
+        real = Path(exe).resolve()
+        key = (str(real), real.stat().st_mtime_ns, flag)
+    except (OSError, TypeError):
+        return False
+    if key not in _claude_flags:
+        needle, found, tail = flag.encode(), False, b""
+        try:
+            with open(real, "rb") as f:
+                while chunk := f.read(1 << 22):
+                    if needle in tail + chunk:
+                        found = True
+                        break
+                    tail = chunk[-len(needle):]
+        except OSError:
+            pass
+        _claude_flags[key] = found
+    return _claude_flags[key]
+
+
 def slim_event(ev):
     t = ev.get("type")
     sub = bool(ev.get("parent_tool_use_id"))
@@ -1388,6 +1443,11 @@ def slim_event(ev):
             return {"type": "delta", "text": e["delta"]["text"], "sub": sub}
         if e.get("type") == "content_block_start" and e.get("content_block", {}).get("type") == "text":
             return {"type": "text_start", "sub": sub}
+        # extended thinking: streamed like text, shown as a collapsible "Thinking…" block in the chat
+        if e.get("type") == "content_block_start" and e.get("content_block", {}).get("type") == "thinking":
+            return {"type": "think_start", "sub": sub}
+        if e.get("type") == "content_block_delta" and e.get("delta", {}).get("type") == "thinking_delta":
+            return {"type": "think_delta", "text": e["delta"].get("thinking", ""), "sub": sub}
         return None
     if t == "assistant":
         blocks = [{"type": "tool_use", "id": b.get("id"), "name": b.get("name"), "input": b.get("input")}

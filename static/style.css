@@ -842,3 +842,36 @@ body:not([data-mode="agent"]) .layout.no-agent .chat, body:not([data-mode="agent
 .msg blockquote { margin: 6px 0; padding: 2px 0 2px 12px; border-left: 3px solid var(--accent-ring); color: var(--text); }
 .msg blockquote p { margin: .35em 0; }
 .msg blockquote blockquote { margin-left: 2px; }
+
+/* ---------- thinking, status line, code blocks, copy buttons ---------- */
+.think { border-radius: 9px; font-size: .95em; }
+.think summary { display: inline-flex; align-items: center; gap: 7px; padding: 3px 8px 3px 4px; border-radius: 7px; color: var(--dim); cursor: pointer; list-style: none; user-select: none; }
+.think summary::-webkit-details-marker { display: none; }
+.think summary:hover { color: var(--text); background: var(--hover); }
+.think summary .ic { width: 14px; height: 14px; }
+.think summary .ic:last-child { width: 12px; height: 12px; transform: rotate(-90deg); transition: transform .15s; }
+.think[open] summary .ic:last-child { transform: none; }
+.think.live summary span { background: linear-gradient(90deg, var(--dim) 30%, var(--text) 50%, var(--dim) 70%); background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.6s linear infinite; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.think-body { margin: 6px 0 2px 11px; padding: 2px 0 2px 14px; border-left: 2px solid var(--line-strong); color: var(--dim); line-height: 1.55; max-height: 420px; overflow: auto; }
+.think-body p { margin: .4em 0; }
+.typing { border: 0; background: none; padding: 2px 4px; font: inherit; text-align: left; cursor: pointer; border-radius: 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.typing:hover { color: var(--text); background: var(--hover); }
+.msg.assistant { position: relative; }
+.msg-copy { position: absolute; right: -4px; bottom: -22px; width: 26px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--faint); display: grid; place-items: center; cursor: pointer; opacity: 0; transition: opacity .12s; }
+.msg.assistant:hover .msg-copy, .msg-copy:focus-visible { opacity: 1; }
+.msg-copy:hover { color: var(--text); background: var(--hover); }
+.msg-copy .ic { width: 13px; height: 13px; }
+.msg-copy.copied, .cb-copy.copied { color: var(--ok); }
+.codeblock { margin: 6px 0; border: 0.5px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--code); }
+.codeblock .cb-head { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 6px 0 11px; font: 11px var(--mono); color: var(--dim); border-bottom: 0.5px solid var(--line); background: var(--surface); }
+.codeblock .cb-copy { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border: 0; border-radius: 5px; background: transparent; color: var(--dim); font: 11px var(--font); cursor: pointer; }
+.codeblock .cb-copy:hover { color: var(--text); background: var(--hover); }
+.codeblock .cb-copy .ic { width: 12px; height: 12px; }
+.codeblock .cb-copy.copied span::after { content: "  ✓"; }
+.msg .codeblock pre, .think-body .codeblock pre { margin: 0; border: 0; border-radius: 0; background: transparent; }
+.msg hr, .think-body hr { border: 0; border-top: 0.5px solid var(--line-strong); margin: 12px 0; }
+.msg del { color: var(--dim); }
+.msg li.task { list-style: none; margin-left: -1.2em; }
+.msg li.task input { vertical-align: -2px; margin-right: 4px; }
