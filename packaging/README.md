@@ -4,11 +4,11 @@ Run `./build.sh` to produce everything in `dist/`:
 
 | File | For | Install |
 |---|---|---|
-| `forge-studio_1.1.0_all.deb` | Debian, Ubuntu, Deepin, Mint, Pop!_OS… | `sudo apt install ./forge-studio_1.1.0_all.deb` |
-| `forge-studio-1.1.0.tar.gz` | **Any** Linux distro | extract, then `sudo ./install.sh` (or `./install.sh --user`) |
-| `forge-studio-1.1.0-1-any.pkg.tar.zst` | Arch, Manjaro, EndeavourOS | `sudo pacman -U forge-studio-1.1.0-1-any.pkg.tar.zst` |
+| `forge-studio_1.1.1_all.deb` | Debian, Ubuntu, Deepin, Mint, Pop!_OS… | `sudo apt install ./forge-studio_1.1.1_all.deb` |
+| `forge-studio-1.1.1.tar.gz` | **Any** Linux distro | extract, then `sudo ./install.sh` (or `./install.sh --user`) |
+| `forge-studio-1.1.1-1-any.pkg.tar.zst` | Arch, Manjaro, EndeavourOS | `sudo pacman -U forge-studio-1.1.1-1-any.pkg.tar.zst` |
 | `PKGBUILD` | Arch (from source, recommended) | put next to the `.tar.gz`, run `makepkg -si` |
-| `forge-studio.spec` | Fedora, RHEL, openSUSE | `rpmbuild -tb forge-studio-1.1.0.tar.gz` (uses this spec) |
+| `forge-studio.spec` | Fedora, RHEL, openSUSE | `rpmbuild -tb forge-studio-1.1.1.tar.gz` (uses this spec) |
 
 The package is architecture-independent (pure Python + static files). It installs to
 `/usr/lib/forge-studio`, a launcher at `/usr/bin/forge-studio`, a desktop entry, and
