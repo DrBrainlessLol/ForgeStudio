@@ -1,0 +1,46 @@
+<idea-plugin>
+    <id>io.github.drbrainlesslol.forgestudio</id>
+    <name>Forge Studio</name>
+    <vendor url="https://github.com/DrBrainlessLol/ForgeStudio">Forge Studio</vendor>
+    <description><![CDATA[
+<p>Forge Studio inside your JetBrains IDE: a local workspace for AI coding agents (Claude Code, Codex and others)
+with chat, plan and agent modes, approvals, Git, previews and Android/Flutter tooling.</p>
+<ul>
+  <li><b>Forge Studio tool window</b> – the full app, already focused on the open project.</li>
+  <li><b>Ask / Explain / Fix / Write Tests</b> – send the selection or file from the editor (right-click → Forge Studio).
+      Forge fills its message box with the code and the file/line reference so you can add details before sending.</li>
+  <li><b>IDE tools for the agent</b> – with the IDE's MCP server on (Settings | Tools | MCP Server, 2025.2+), Forge Studio
+      gives Claude Code the IDE's refactorings, inspections and run configurations.</li>
+</ul>
+<p>Needs Forge Studio installed on this computer. Everything stays local: the plugin only talks to 127.0.0.1.</p>
+]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Forge Studio" anchor="right" icon="/icons/forge.svg"
+                    factoryClass="io.github.drbrainlesslol.forgestudio.ForgeToolWindowFactory"/>
+        <applicationConfigurable parentId="tools" id="io.github.drbrainlesslol.forgestudio.settings" displayName="Forge Studio"
+                                 instance="io.github.drbrainlesslol.forgestudio.ForgeConfigurable"/>
+        <notificationGroup id="Forge Studio" displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <group id="ForgeStudio.Menu" text="Forge Studio" popup="true" icon="/icons/forge.svg">
+            <action id="ForgeStudio.Ask" class="io.github.drbrainlesslol.forgestudio.AskForgeAction"
+                    text="Ask Forge Studio…" description="Send the selection or file to Forge Studio and write your question there"/>
+            <action id="ForgeStudio.Explain" class="io.github.drbrainlesslol.forgestudio.ExplainAction"
+                    text="Explain" description="Ask Forge Studio's agent to explain the selected code"/>
+            <action id="ForgeStudio.Fix" class="io.github.drbrainlesslol.forgestudio.FixAction"
+                    text="Find and Fix Problems" description="Ask Forge Studio's agent to find and fix problems in the selected code"/>
+            <action id="ForgeStudio.Tests" class="io.github.drbrainlesslol.forgestudio.WriteTestsAction"
+                    text="Write Tests" description="Ask Forge Studio's agent to write tests for the selected code"/>
+            <separator/>
+            <action id="ForgeStudio.Open" class="io.github.drbrainlesslol.forgestudio.OpenProjectAction"
+                    text="Open Project in Forge Studio" description="Open this project in Forge Studio"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </group>
+    </actions>
+</idea-plugin>

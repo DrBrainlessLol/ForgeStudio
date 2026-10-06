@@ -967,6 +967,8 @@ function openSettings(sec = "general") {
   $("#setMode").value = S.prefs.mode || "ask";
   renderNotifySettings();
   $("#setHideTest").checked = !!S.settings?.hideTest;
+  $("#setJbMcp").checked = S.settings?.jbMcp !== false;
+  $("#setJbMcpUrl").value = S.settings?.jbMcpUrl || "";
   fillProfile(); renderAgentList(); renderPluginList(); renderProviders(); renderWeb();
   $("#setStudio").value = S.settings?.studio_path || "";
   const t = S.tools;
@@ -1935,6 +1937,16 @@ function showShortcuts() {
   $("#dlgKeys").showModal();
 }
 $("#keysClose").onclick = () => $("#dlgKeys").close();
+async function checkJbMcp() {
+  const st = $("#jbMcpStatus");
+  st.textContent = "Looking for the IDE…";
+  const r = await api("/api/ide/mcp", {});
+  st.textContent = !r.enabled ? "Off" : r.url ? `Connected: ${r.url}` : "No IDE found. Open a JetBrains IDE and enable Settings | Tools | MCP Server";
+  st.className = r.url ? "" : "dim";
+}
+$("#btnJbMcp").onclick = act(checkJbMcp);
+$("#setJbMcp").onchange = act(async () => { await api("/api/settings", { jbMcp: $("#setJbMcp").checked }); S.settings.jbMcp = $("#setJbMcp").checked; await checkJbMcp(); });
+$("#setJbMcpUrl").onchange = act(async () => { await api("/api/settings", { jbMcpUrl: $("#setJbMcpUrl").value }); S.settings.jbMcpUrl = $("#setJbMcpUrl").value.trim(); await checkJbMcp(); });
 $("#btnKeys").onclick = () => { $("#dlgSettings").close(); showShortcuts(); };
 document.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();

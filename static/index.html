@@ -588,6 +588,13 @@
         <div class="form-group">
           <div class="form-row"><span>Hide test profiles on the sign-in screen<br><small class="dim">profiles you mark as “test” in Profile &amp; Account</small></span><label class="switch"><input type="checkbox" id="setHideTest"><i></i></label></div>
         </div>
+        <h3>JetBrains IDE</h3>
+        <div class="form-group">
+          <div class="form-row"><span>Give Claude Code the IDE's tools<br><small class="dim">refactoring, inspections, run configurations and more, through the IDE's MCP server (IntelliJ-based IDEs 2025.2+: Settings | Tools | MCP Server → Enable). Agent and Plan modes only.</small></span><label class="switch"><input type="checkbox" id="setJbMcp"><i></i></label></div>
+          <label class="form-row"><span>Server URL<br><small class="dim">leave empty to find it automatically</small></span><input id="setJbMcpUrl" placeholder="http://127.0.0.1:64342/sse" spellcheck="false"></label>
+          <div class="form-row"><span id="jbMcpStatus" class="dim">Not checked yet</span><button class="btn" id="btnJbMcp">Check</button></div>
+          <div class="form-row"><span>Forge Studio plugin for JetBrains IDEs<br><small class="dim">a Forge Studio tool window plus Ask / Explain / Fix / Write tests from the editor. Build it from <code>jetbrains-plugin/</code> and install it with Settings | Plugins → Install Plugin from Disk.</small></span></div>
+        </div>
       </section>
 
       <section data-sec="profile" hidden>

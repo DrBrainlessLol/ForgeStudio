@@ -927,6 +927,12 @@ class Run:
             extra = ("Chat mode: in this conversation you have no tools at all. Don't try to call or simulate tools (no "
                      "function-call markup); answer directly from what you know and what the user shares, and if you'd need to "
                      "look at files or run something, say so and suggest switching to Agent mode.")
+        else:
+            jb = jetbrains_mcp()
+            if jb:
+                cmd += ["--mcp-config", json.dumps({"mcpServers": {"jetbrains": {
+                    "type": "sse" if jb.endswith("/sse") else "http", "url": jb}}})]
+                extra += "\n\n" + JB_PROMPT
         cmd += ["--add-dir", str(out_dir), "--append-system-prompt", extra]
         if mode == "ask":
             cmd += ["--permission-mode", "default", "--permission-prompt-tool", "stdio"]
@@ -1508,6 +1514,45 @@ def ide_context(b):
         windows = len(_subs)
     emit({"type": "ide_context", "project": project, "prompt": prompt, "send": False, "ide": b.get("ide") or "JetBrains IDE"})
     return {"ok": True, "delivered": windows}
+
+
+JB_PROMPT = ("A JetBrains IDE is connected through MCP (tools named mcp__jetbrains__*). Prefer its tools where they beat "
+             "plain text edits: rename_refactoring for renames (updates every reference), get_file_problems to check a file "
+             "with the IDE's inspections after editing it, get_symbol_info for types/declarations, the run-configuration "
+             "tools to build, run and test the way the project is set up, and any database tools it offers to look at "
+             "real schemas before writing queries or migrations.")
+_jb_cache = {"t": 0, "url": None}
+
+
+def _sse_alive(url, timeout=0.4):
+    import http.client
+    u = urlparse(url)
+    try:
+        c = http.client.HTTPConnection(u.hostname, u.port, timeout=timeout)
+        c.request("GET", u.path or "/", headers={"Accept": "text/event-stream"})
+        r = c.getresponse()
+        ok = r.status == 200 and "event-stream" in (r.getheader("Content-Type") or "")
+        c.close()
+        return ok
+    except OSError:
+        return False
+
+
+def jetbrains_mcp(fresh=False):
+    """URL of a running JetBrains IDE MCP server (Settings | Tools | MCP Server), or None. Probes the default ports."""
+    s = CONFIG["settings"]
+    if s.get("jbMcp") is False:
+        return None
+    if not fresh and time.time() - _jb_cache["t"] < 20:
+        return _jb_cache["url"]
+    custom = (s.get("jbMcpUrl") or "").strip()
+    found = None
+    if custom:
+        found = custom if (not custom.endswith("/sse") or _sse_alive(custom)) else None  # streamable HTTP: trust it
+    else:
+        found = next((u for u in (f"http://127.0.0.1:{p}/sse" for p in range(64342, 64352)) if _sse_alive(u, 0.25)), None)
+    _jb_cache.update(t=time.time(), url=found)
+    return found
 
 
 def chat_outputs(prof, cid):
@@ -3590,6 +3635,8 @@ class Handler(BaseHTTPRequestHandler):
                         for k, v in FLUTTER_RUNS.items()},
             "settings": {"studio_path": CONFIG["settings"].get("studio_path"),
                          "hideTest": bool(CONFIG["settings"].get("hideTest")),
+                         "jbMcp": CONFIG["settings"].get("jbMcp") is not False,
+                         "jbMcpUrl": CONFIG["settings"].get("jbMcpUrl") or "",
                          "google": {"clientId": (CONFIG["settings"].get("google") or {}).get("clientId", "")}},
         }
 
@@ -3729,8 +3776,18 @@ class Handler(BaseHTTPRequestHandler):
                 CONFIG["settings"]["studio_path"] = b["studio_path"] or None
             if "hideTest" in b:
                 CONFIG["settings"]["hideTest"] = bool(b["hideTest"])
+            if "jbMcp" in b:
+                CONFIG["settings"]["jbMcp"] = bool(b["jbMcp"])
+            if "jbMcpUrl" in b:
+                url = (b["jbMcpUrl"] or "").strip()
+                if url and not re.match(r"^https?://\S+$", url):
+                    raise ValueError("Enter the MCP server URL, e.g. http://127.0.0.1:64342/sse")
+                CONFIG["settings"]["jbMcpUrl"] = url
+            _jb_cache["t"] = 0
             save_config()
             return None
+        if path == "/api/ide/mcp":
+            return {"enabled": CONFIG["settings"].get("jbMcp") is not False, "url": jetbrains_mcp(fresh=True)}
         # ---- chats
         if path == "/api/chat/send":
             cid = start_chat(prof, project, b.get("prompt", ""), b.get("chat"), b.get("model"), b.get("mode"),

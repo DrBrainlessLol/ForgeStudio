@@ -31,6 +31,7 @@ Works on Linux and macOS. Installs the latest release for your user into `~/.loc
 - Desktop / app menu: **Forge Studio**
 - Terminal: `forge-studio` or `forge-studio ~/path/to/project`
 - Android Studio: **Tools → External Tools → Open in Forge Studio**
+- JetBrains IDEs (IntelliJ IDEA, Android Studio, PyCharm, WebStorm, GoLand…): the [Forge Studio plugin](#jetbrains-ides)
 - Other devices: **Settings → Web App → Use from phones and other computers** (port 8766, needs the link with its token)
 
 > Forge Studio is an independent project. It works with Claude Code, Codex, Gemini CLI and other coding agents, but it is **not made by, affiliated with or endorsed by** Anthropic, OpenAI, Google or any other AI provider. Their names and products are trademarks of their respective owners.
@@ -110,6 +111,17 @@ See `packaging/README.md` for details.
 - **Tasks** in the Agent sidebar show which chats are working and which just finished, across projects.
 - Tool cards expand to the full command and output, with copy buttons. Long chats show the latest 150 messages with **Show earlier messages** to load more, so they open quickly.
 - **Notifications**: a short chime and, when Forge Studio isn't the active window, a system notification when the agent needs approval, a task finishes, a Gradle build ends or your app crashes. Each can be turned off in Settings → General.
+
+## Composer
+- **Agent / Plan / Chat** (Shift+Tab cycles): Plan researches and proposes without editing, then offers **Build this plan**; Chat answers with no tools at all.
+- **Reasoning** (Low … Max) and **Fast mode** for Claude Code, remembered per profile.
+- Phased work gets **Move to Phase N** / **Move to next phase** buttons when a reply finishes a phase.
+- Files the agent makes for you (zip, PDF, Word, Markdown, images…) appear as **File ready** cards; folders in the explorer can be downloaded as a ZIP.
+- Keyboard shortcuts: press **F1** or **?** for the list.
+
+## JetBrains IDEs
+- **Plugin** (`jetbrains-plugin/`, IntelliJ-based IDEs 2024.3+): a **Forge Studio** tool window with the full app focused on the open project, and **Ask / Explain / Find and Fix Problems / Write Tests / Open Project** in the editor and project-view right-click menus (and Tools → Forge Studio). The code and its file/line reference land in Forge's message box. Build it with `cd jetbrains-plugin && ./gradlew buildPlugin` and install `build/distributions/*.zip` with **Settings → Plugins → ⚙ → Install Plugin from Disk**. It starts Forge Studio if it isn't running and reads the token from `~/.config/forge-studio/token`.
+- **IDE tools for the agent**: turn on the IDE's MCP server (**Settings → Tools → MCP Server**, 2025.2+). Forge Studio finds it and gives Claude Code the IDE's refactorings (safe rename across the project), inspections, symbol info and run configurations in Agent and Plan modes. Settings → General → JetBrains IDE switches it off or sets the address by hand.
 
 ## Plugins
 Settings → Plugins installs plugins from a folder or a Git URL, or scaffolds a new one. A plugin is a folder with `.claude-plugin/plugin.json` and optional `commands/`, `agents/`, `skills/`, `.mcp.json` and `README.md`. Claude Code loads them natively; the built-in engine supports commands, agents and skills (not MCP). They live in `~/.config/forge-studio/plugins`.
