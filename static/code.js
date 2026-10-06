@@ -237,7 +237,7 @@ function showMenu(x, y, items) {
   m.hidden = false;
   const w = m.offsetWidth, h = m.offsetHeight;
   m.style.left = Math.min(x, innerWidth - w - 8) + "px";
-  m.style.top = Math.min(y, innerHeight - h - 8) + "px";
+  m.style.top = Math.max(8, Math.min(y, innerHeight - h - 8)) + "px";
 }
 document.addEventListener("click", () => ($("#ctxMenu").hidden = true));
 document.addEventListener("contextmenu", (e) => { if (!e.target.closest(".tree, #ctxMenu")) $("#ctxMenu").hidden = true; }, true);
@@ -253,6 +253,7 @@ function treeMenu(ev, rel, isDir) {
     { label: "Rename", icon: "edit", sc: "F2", fn: () => renameEntry(rel) },
     { label: "Delete", icon: "trash", sc: "Del", danger: true, fn: () => deleteEntry(rel) },
     "sep",
+    ...(isDir ? [{ label: "Download as ZIP", icon: "download", fn: () => open(`/api/code/zip?project=${encodeURIComponent(S.cur)}&path=${encodeURIComponent(rel)}&token=${encodeURIComponent(TOKEN)}&login=${encodeURIComponent(LOGIN)}`, "_blank") }] : []),
     { label: "Copy Path", icon: "copy", fn: () => copyText(abs) },
     { label: "Copy Relative Path", icon: "copy", fn: () => copyText(rel) },
   );
@@ -293,7 +294,6 @@ function deleteEntry(rel) {
     invalidateFiles(); C.dir = {}; await loadTree(); loadGit();
   })();
 }
-async function copyText(t) { try { await navigator.clipboard.writeText(t); toast("Copied"); } catch { toast("Copy failed", true); } }
 
 // ============================================================ editor: tabs
 const edActive = () => C.tabs.find((t) => t.path === C.active);

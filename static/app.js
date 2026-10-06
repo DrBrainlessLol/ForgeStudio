@@ -230,6 +230,14 @@ function renderItem(it) {
       b.onclick = () => copyText(it.text, b);
       el.append(b);
     }
+  } else if (it.k === "files") {
+    // files the agent made for the user this turn: download / open / preview
+    el = document.createElement("div"); el.className = "outputs";
+    el.innerHTML = `<div class="outputs-head">${ic("download")} ${it.files.length === 1 ? "File ready" : `${it.files.length} files ready`}</div>` + it.files.map((f) => `
+      <div class="out-file">${f.kind === "image" ? `<img src="${fileUrl(f.path)}" alt="" loading="lazy">` : `<span class="out-ext">${esc((f.name.split(".").pop() || "file").slice(0, 4))}</span>`}
+        <span class="grow"><b title="${esc(f.path)}">${esc(f.name)}</b><small>${fmtSize(f.size)}</small></span>
+        <a class="btn small" href="${fileUrl(f.path)}" target="_blank" rel="noopener">${ic("external")} Open</a>
+        <a class="btn small primary" href="${fileUrl(f.path, true)}">${ic("download")} Download</a></div>`).join("");
   } else if (it.k === "think") {
     // collapsed by default like other agents' "Thinking…"; the body is only built when opened (long chats stay light)
     el = document.createElement("details"); el.className = "think" + (it.sub ? " sub" : "") + (it.done ? "" : " live");
@@ -339,6 +347,7 @@ function applyEvent(items, ev) {
       break;
     }
     case "thinking": push({ k: "think", text: ev.text, sub: ev.sub, ms: ev.ms, done: true }); break;
+    case "outputs": if (ev.files?.length) push({ k: "files", files: ev.files }); break;
     case "delta": {
       let it = last && last.k === "text" && !!last.sub === !!ev.sub ? last : push({ k: "text", text: "", sub: ev.sub });
       it.text += ev.text;
@@ -395,6 +404,7 @@ function applyEvent(items, ev) {
 function renderChat() {
   const box = $("#messages");
   box.innerHTML = "";
+  $("#nextActions").hidden = true;
   const cid = chatId();
   $("#chatTitle").textContent = cid ? S.meta[cid]?.title || "Chat" : "New chat";
   const ag = cid && S.meta[cid]?.agent;
@@ -439,6 +449,7 @@ function renderChat() {
   const frag = document.createDocumentFragment();
   for (let i = start; i < items.length; i++) frag.append(renderItem(items[i]));
   box.append(frag);
+  renderNextActions();
   updateBusy();
   box.scrollTop = box.scrollHeight;
 }
@@ -478,7 +489,7 @@ function onChat(cid, projectPath, ev) {
   if (ev.type === "ui_start" || ev.type === "ui_end") { if (visible) updateBusy(); else renderProjects(); }
   if (ev.type === "ui_end" && !visible && S.meta[cid]) toast(`Finished: ${S.meta[cid].title}`);
   if (ev.type === "ui_end" && S.meta[cid] && (!visible || document.hidden || !document.hasFocus())) alertUser("done", "Agent finished", S.meta[cid].title, openIt);
-  if (ev.type === "ui_end") { S.done = [{ cid }, ...(S.done || []).filter((d) => d.cid !== cid)].slice(0, 8); renderTasks(); }
+  if (ev.type === "ui_end") { S.done = [{ cid }, ...(S.done || []).filter((d) => d.cid !== cid)].slice(0, 8); renderTasks(); if (visible) renderNextActions(); }
   // live editor/git refresh when the agent edits files in the open project
   if (projectPath === S.cur && typeof codeAgentTouched === "function") {
     if (ev.type === "tool_results" && ev.results?.length) {
@@ -489,6 +500,34 @@ function onChat(cid, projectPath, ev) {
     }
     if (ev.type === "ui_end") codeRefresh();
   }
+}
+// "Build this plan" after a plan, "Move to Phase N" when a phased task finished a phase
+function renderNextActions() {
+  const box = $("#nextActions"), cid = chatId();
+  const items = (cid && S.items[cid]) || [];
+  let last = null;
+  for (let i = items.length - 1; i >= 0 && items[i].k !== "user"; i--) if (items[i].k === "text" && !items[i].sub && items[i].text.trim()) { last = items[i]; break; }
+  const chips = [];
+  if (last && !S.running[cid]) {
+    const t = last.text;
+    if ((S.lastStyle?.[cid] || $("#style").value) === "plan")
+      chips.push({ label: "Build this plan", icon: "play", style: "agent", prompt: "The plan looks good. Go ahead and implement it, phase by phase." });
+    const done = [...t.matchAll(/\bphase\s*(\d+)\b[^\n.]{0,40}?\b(complete[d]?|done|finished|implemented|wrapped up)\b/gi)].map((m) => +m[1]);
+    const all = [...t.matchAll(/\bphase\s*(\d+)\b/gi)].map((m) => +m[1]);
+    if (done.length) {
+      const n = Math.max(...done) + 1;
+      chips.push({ label: `Move to Phase ${n}`, icon: "arrow-down", prompt: `Phase ${n - 1} looks good. Move on to Phase ${n}.` });
+    } else if (all.length > 1 || /\bnext (phase|step)\b/i.test(t)) {
+      chips.push({ label: "Move to next phase", icon: "arrow-down", prompt: "Looks good. Move on to the next phase." });
+    }
+  }
+  box.hidden = !chips.length;
+  box.innerHTML = chips.map((c, i) => `<button class="chip next" data-i="${i}">${ic(c.icon)}<span>${esc(c.label)}</span></button>`).join("");
+  box.querySelectorAll("button").forEach((b) => (b.onclick = act(async () => {
+    const c = chips[b.dataset.i];
+    if (c.style) { $("#style").value = c.style; styleChanged(); }
+    await send(c.prompt);
+  })));
 }
 function updateBusy() {
   const cid = chatId();
@@ -567,7 +606,17 @@ function agentChanged(save = true) {
   $$("#mode option").forEach((o) => (o.hidden = kind === "codex" && ["ask", "auto"].includes(o.value)));
   if (kind === "codex" && ["ask", "auto"].includes($("#mode").value)) $("#mode").value = "acceptEdits";
   $("#mode").disabled = kind === "generic";
+  $("#effort").hidden = $("#btnFast").hidden = kind !== "claude";
+  styleChanged(false);
   renderModels();
+}
+function styleChanged(save = true) {
+  const st = $("#style").value;
+  $("#mode").disabled = st !== "agent" || currentAgent()?.kind === "generic";
+  $("#prompt").placeholder = st === "plan" ? "Describe what you want — the agent researches and proposes a plan, without changing files"
+    : st === "chat" ? "Ask anything — chat only, the agent won't run tools or touch files"
+    : "Message the agent — attach images or files with the clip, paste, or drag & drop";
+  if (save) store.set(pkey("style"), st);
 }
 function renderModels() {
   const sel = $("#model"), a = currentAgent(), prev = store.get(pkey("model:" + a?.id), "local::");
@@ -650,7 +699,10 @@ async function send(text) {
   const p = S.cur, cid = chatId();
   if (cid && S.running[cid]) throw new Error("The agent is still working on this chat");
   const { provider, model } = modelChoice();
-  const r = await api("/api/chat/send", { project: p, chat: cid, prompt: text, mode: $("#mode").value, model, provider, files, agent: $("#agent").value });
+  const r = await api("/api/chat/send", { project: p, chat: cid, prompt: text, mode: $("#mode").value, model, provider, files, agent: $("#agent").value,
+    style: $("#style").value, effort: $("#effort").value || null, fast: $("#btnFast").classList.contains("on") });
+  S.lastStyle = { ...(S.lastStyle || {}), [r.chat]: $("#style").value };
+  $("#nextActions").hidden = true;
   S.loaded[r.chat] = true;
   S.items[r.chat] ??= [];
   if (!cid) { S.curChat[p] = r.chat; if (S.cur === p) renderChat(); }
@@ -1660,6 +1712,16 @@ function connect() {
         if (ev.project === S.cur) { renderFlutterRun(); renderStatusBar(); }
         break;
       case "toast": toast(ev.text, ev.err); break;
+      case "ide_context": act(async () => {  // from the JetBrains plugin
+        if (!S.projects.some((p) => p.path === ev.project)) await loadState();
+        if (S.cur !== ev.project) await selectProject(ev.project);
+        if (ev.prompt != null) {
+          const box = $("#prompt");
+          box.value = (box.value.trim() ? box.value.trimEnd() + "\n\n" : "") + ev.prompt;
+          box.focus(); box.setSelectionRange(box.value.length, box.value.length); box.oninput?.();
+        }
+        toast(`From ${ev.ide}: ${ev.prompt == null ? "opened " + (project()?.name || "project") : "added to the message box"}`);
+      })(); break;
       case "setup_done":
         toast(ev.text, !ev.ok);
         act(async () => { await loadSetup(); await loadState(); if (S.cur) setupAndroid(); if (S.mode === "android") { loadToolchain(); await refreshDevices(); } })();
@@ -1858,6 +1920,36 @@ function renderStatusBar() {
 }
 
 // ============================================================ wiring: chat
+// ---- keyboard shortcuts (F1 or ? shows them all)
+const SHORTCUTS = [
+  ["General", [["Ctrl+1 / 2 / 3", "Agent / Editor / Android mode"], ["Ctrl+B", "Show / hide the projects sidebar"], ["Ctrl+J", "Show / hide the agent chat (Editor, Android)"],
+    ["Ctrl+O", "Switch project"], ["Ctrl+,", "Settings"], ["F1 or ?", "This list"]]],
+  ["Chat", [["Enter / Shift+Enter", "Send / new line"], ["Ctrl+L", "Focus the message box"], ["Shift+Tab", "Cycle Agent → Plan → Chat"],
+    ["Alt+N", "New chat"], ["Ctrl+Shift+H", "Chat history"], ["Ctrl+Shift+⌫", "Stop the agent"]]],
+  ["Editor", [["Ctrl+P", "Go to file"], ["Ctrl+Shift+F", "Search in files"], ["Ctrl+Shift+E / G", "Explorer / Source control"],
+    ["Ctrl+S", "Save"], ["Ctrl+G", "Go to line"], ["Ctrl+/", "Toggle comment"], ["Tab / Shift+Tab", "Indent / outdent"]]],
+];
+function showShortcuts() {
+  $("#keysList").innerHTML = SHORTCUTS.map(([group, rows]) => `<h4>${group}</h4><div class="form-group">${rows.map(([k, what]) =>
+    `<div class="form-row"><span>${esc(what)}</span><span class="kbd">${k.split(" / ").map((x) => x.split(" or ").map((y) => `<kbd>${esc(y)}</kbd>`).join(" or ")).join(" / ")}</span></div>`).join("")}</div>`).join("");
+  $("#dlgKeys").showModal();
+}
+$("#keysClose").onclick = () => $("#dlgKeys").close();
+$("#btnKeys").onclick = () => { $("#dlgSettings").close(); showShortcuts(); };
+document.addEventListener("keydown", (e) => {
+  const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
+  if (document.querySelector("dialog[open]") && k !== "escape") return;
+  if (e.key === "F1" || (e.key === "?" && !typing)) { e.preventDefault(); showShortcuts(); }
+  else if (mod && !e.shiftKey && k === "b") { e.preventDefault(); $("#btnSidebar").click(); }
+  else if (mod && !e.shiftKey && k === "l") { e.preventDefault(); $("#prompt").focus(); }
+  else if (mod && !e.shiftKey && k === "o") { e.preventDefault(); $("#btnProj").onclick(new MouseEvent("click")); }
+  else if (mod && !e.shiftKey && e.key === ",") { e.preventDefault(); openSettings("general"); }
+  else if (e.altKey && !mod && k === "n") { e.preventDefault(); act(() => openChat(null))(); $("#prompt").focus(); }
+  else if (mod && e.shiftKey && k === "h") { e.preventDefault(); $("#btnHistory").click(); }
+  else if (mod && e.shiftKey && e.key === "Backspace" && !$("#btnStop").hidden) { e.preventDefault(); $("#btnStop").click(); }
+});
+
 // copy buttons on code blocks (in replies, thinking and anywhere md() renders); one listener for the whole chat
 $("#messages").addEventListener("click", (e) => {
   const b = e.target.closest(".cb-copy");
@@ -1866,7 +1958,20 @@ $("#messages").addEventListener("click", (e) => {
   copyText(b.closest(".codeblock").querySelector("code").textContent, b);
 });
 $("#composer").onsubmit = (e) => { e.preventDefault(); act(send)(); };
-$("#prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); act(send)(); } };
+$("#prompt").onkeydown = (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); act(send)(); }
+  else if (e.key === "Tab" && e.shiftKey) {  // Shift+Tab cycles Agent → Plan → Chat, like Claude Code
+    e.preventDefault();
+    const o = ["agent", "plan", "chat"], st = $("#style");
+    st.value = o[(o.indexOf(st.value) + 1) % o.length]; styleChanged();
+    toast(`${st.selectedOptions[0].textContent} mode`);
+  }
+};
+$("#style").value = "agent";
+$("#style").onchange = () => styleChanged();
+$("#effort").onchange = () => store.set(pkey("effort"), $("#effort").value);
+$("#btnFast").onclick = () => { $("#btnFast").classList.toggle("on"); store.set(pkey("fast"), $("#btnFast").classList.contains("on"));
+  toast($("#btnFast").classList.contains("on") ? "Fast mode on: quicker replies (supported Claude models)" : "Fast mode off"); };
 $("#prompt").oninput = () => { const t = $("#prompt"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, innerHeight * 0.4) + "px"; };
 $("#prompt").onpaste = (e) => {
   const files = [...(e.clipboardData?.files || [])];
@@ -2142,6 +2247,8 @@ $("#dlgAdd").onclose = act(async () => {
   if (!LOGIN) return showLogin();
   try { await loadState(); } catch (e) { if (!(e instanceof LoginNeeded)) toast("Can't reach server: " + e.message, true); return; }
   $("#mode").value = S.prefs.mode || "ask";
+  $("#style").value = store.get(pkey("style"), "agent"); $("#effort").value = store.get(pkey("effort"), "");
+  $("#btnFast").classList.toggle("on", store.get(pkey("fast"), false)); styleChanged(false);
   connect();
   applyDevice();
   const tab = store.get("fs:tab", "preview");

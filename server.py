@@ -785,6 +785,7 @@ class Run:
         self.finished = False
         self.always = set()
         self.lock = threading.Lock()
+        self.opts = {"effort": None, "fast": False, "style": "agent"}
         self.text_buf = {"text": "", "sub": False}
         self.think_buf = {"text": "", "sub": False, "t0": None}
 
@@ -798,6 +799,9 @@ class Run:
         if self.text_buf["text"]:
             self.prof.append(self.cid, {"type": "text", "text": self.text_buf["text"], "sub": self.text_buf["sub"]})
             self.text_buf["text"] = ""
+
+    def outputs_note(self):
+        return "\n\n" + OUTPUTS_PROMPT.format(dir=chat_outputs(self.prof, self.cid))
 
     def think(self, text, sub=False):
         tb = self.think_buf
@@ -868,12 +872,19 @@ class Run:
 
     def guard(self, target):
         code, err = 1, ""
+        started = time.time() - 1
         try:
             code, err = target()
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
         self.flush_think()
         self.flush()
+        try:
+            made = new_outputs(self.prof, self.cid, self.project, started)
+            if made:
+                self.send({"type": "outputs", "files": made})
+        except Exception:
+            pass
         for aid in [k for k, v in APPROVALS.items() if v["run"] is self]:
             APPROVALS.pop(aid, None)
             self.send({"type": "approval_done", "id": aid, "decision": "cancelled"}, log=False)
@@ -885,6 +896,7 @@ class Run:
         self.send({"type": "ui_end", "code": code}, log=False)
 
     def spawn(self, cmd, env, stdin=subprocess.PIPE):
+        env = dict(env, FORGE_OUTPUT_DIR=str(chat_outputs(self.prof, self.cid)))
         self.popen = subprocess.Popen(cmd, cwd=self.project, env=env, stdin=stdin, stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE, text=True, bufsize=1, errors="replace",
                                       start_new_session=True)
@@ -900,13 +912,29 @@ class Run:
         if claude_supports(exe, "--thinking-display"):
             cmd += ["--thinking-display", "summarized"]  # headless mode otherwise sends empty thinking blocks
         mode = self.mode or "acceptEdits"
+        style = self.opts.get("style", "agent")
+        if style == "plan":  # research and propose, no edits
+            mode = "plan"
+        elif style == "chat":  # just talk: no built-in tools and no MCP servers (incl. account connectors)
+            cmd += ["--tools", "", "--strict-mcp-config"]
+        if self.opts.get("effort") and claude_supports(exe, "--effort"):
+            cmd += ["--effort", self.opts["effort"]]
+        if self.opts.get("fast"):
+            cmd += ["--settings", json.dumps({"fastMode": True})]
+        out_dir = chat_outputs(self.prof, self.cid)
+        extra = OUTPUTS_PROMPT.format(dir=out_dir)
+        if style == "chat":
+            extra = ("Chat mode: in this conversation you have no tools at all. Don't try to call or simulate tools (no "
+                     "function-call markup); answer directly from what you know and what the user shares, and if you'd need to "
+                     "look at files or run something, say so and suggest switching to Agent mode.")
+        cmd += ["--add-dir", str(out_dir), "--append-system-prompt", extra]
         if mode == "ask":
             cmd += ["--permission-mode", "default", "--permission-prompt-tool", "stdio"]
         elif mode in ("acceptEdits", "auto", "plan"):
             cmd += ["--permission-mode", mode, "--permission-prompt-tool", "stdio"]
         else:
             cmd += ["--permission-mode", "bypassPermissions"]
-        for p in enabled_plugins():  # commands, agents, skills and .mcp.json load natively
+        for p in (enabled_plugins() if style != "chat" else []):  # commands, agents, skills and .mcp.json load natively
             cmd += ["--plugin-dir", p["path"]]
         if self.model:
             cmd += ["--model", self.model]
@@ -1239,7 +1267,7 @@ class Run:
                 yield line[5:].strip()
 
     def req_anthropic(self, url, headers, model, messages, totals):
-        body = {"model": model, "max_tokens": 8192, "stream": True, "system": BUILTIN_SYSTEM + plugin_system_note(),
+        body = {"model": model, "max_tokens": 8192, "stream": True, "system": BUILTIN_SYSTEM + plugin_system_note() + self.outputs_note(),
                 "tools": ANTHROPIC_TOOLS, "messages": messages}
         resp, err = self._open_stream(url, headers, body)
         if err:
@@ -1286,7 +1314,7 @@ class Run:
     def req_openai(self, url, headers, model, messages, totals):
         body = {"model": model, "max_tokens": 8192, "stream": True, "tools": OPENAI_TOOLS, "tool_choice": "auto",
                 "stream_options": {"include_usage": True},
-                "messages": [{"role": "system", "content": BUILTIN_SYSTEM + plugin_system_note()}] + messages}
+                "messages": [{"role": "system", "content": BUILTIN_SYSTEM + plugin_system_note() + self.outputs_note()}] + messages}
         resp, err = self._open_stream(url, headers, body)
         if err:
             return None, None, err
@@ -1346,7 +1374,7 @@ OPENAI_TOOLS = [{"type": "function", "function": {"name": n, "description": d, "
 
 
 def start_chat(prof: Profile, project, prompt, chat_id=None, model=None, mode="acceptEdits", provider_id=None,
-               files=None, agent_id="claude"):
+               files=None, agent_id="claude", opts=None):
     chats = prof.data["chats"]
     if chat_id and chat_id not in chats:
         raise ValueError("That chat no longer exists")
@@ -1378,6 +1406,9 @@ def start_chat(prof: Profile, project, prompt, chat_id=None, model=None, mode="a
     prof.data["current"][project] = chat_id
     prof.save()
     run = Run(prof, chat, project, prompt, files, agent, model, mode, prov)
+    o = opts or {}
+    run.opts = {"effort": o.get("effort") if o.get("effort") in ("low", "medium", "high", "xhigh", "max") else None,
+                "fast": bool(o.get("fast")), "style": o.get("style") if o.get("style") in ("agent", "plan", "chat") else "agent"}
     RUNS[chat_id] = run
     run.start()
     emit({"type": "chats_changed", "project": project}, profile=prof.pid)
@@ -1407,6 +1438,111 @@ def trim_event(ev):
             return [cut(x) for x in v]
         return v
     return cut(ev) if ev.get("type") in ("tools", "tool_results", "approval") else ev
+
+
+OUTPUTS_PROMPT = ("You are running inside Forge Studio. When the user asks for a file to download or keep (a zip, PDF, Word "
+                  "or other document, spreadsheet, image, audio, an exported or converted file, etc.), save the finished file in "
+                  "{dir} — Forge Studio shows everything there to the user with Download and Open buttons. You may use any "
+                  "tool or script to produce it (e.g. Python's zipfile, pandoc, LibreOffice in headless mode). Mention the "
+                  "file name in your reply.")
+DELIVERABLE_EXT = {".zip", ".tar", ".gz", ".tgz", ".7z", ".pdf", ".docx", ".doc", ".odt", ".rtf", ".xlsx", ".xls", ".ods",
+                   ".csv", ".pptx", ".odp", ".epub", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".mp3", ".wav",
+                   ".ogg", ".mp4", ".webm", ".apk", ".aab", ".ipa", ".dmg", ".deb", ".exe", ".msi"}
+
+
+APP_VERSION = "1.0.0"
+ZIP_SKIP = {".git", "node_modules", "__pycache__", ".gradle", ".dart_tool", ".idea", ".kotlin"}
+
+
+def zip_folder(d: Path, limit=1 << 30):
+    """A folder as a .zip (in memory, up to 1 GB), skipping VCS data and dependency/cache folders."""
+    import io
+    import zipfile
+    buf, total = io.BytesIO(), 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for base, dirs, names in os.walk(d):
+            dirs[:] = [x for x in dirs if x not in ZIP_SKIP]
+            for n in names:
+                f = Path(base) / n
+                try:
+                    total += f.stat().st_size
+                except OSError:
+                    continue
+                if total > limit:
+                    raise ValueError("That folder is over 1 GB; zip a smaller folder")
+                z.write(f, f.relative_to(d.parent))
+    return buf.getvalue()
+
+
+IDE_ACTIONS = {"ask": "", "explain": "Explain this code: what it does, how it works and anything surprising.",
+               "fix": "Find and fix the problems in this code. Explain what was wrong.",
+               "tests": "Write tests for this code that cover the important behaviour and edge cases.", "open": None}
+
+
+def ide_context(b):
+    """Selection / file sent from a JetBrains IDE: register the project and hand the UI a ready-to-send prompt."""
+    project = str(Path(b.get("project") or "").expanduser().resolve())
+    if not b.get("project") or not Path(project).is_dir():
+        raise ValueError("project folder not found")
+    action = b.get("action") if b.get("action") in IDE_ACTIONS else "ask"
+    if project not in project_paths():
+        CONFIG["projects"].insert(0, project)
+        CONFIG["hidden"] = [h for h in CONFIG["hidden"] if h != project]
+        save_config()
+    prompt = None
+    if action != "open":
+        f, sel = b.get("file"), (b.get("selection") or "")[:60000]
+        where = ""
+        if f:
+            rel = os.path.relpath(f, project) if str(f).startswith(project) else f
+            lines = f" (lines {b['startLine']}–{b['endLine']})" if b.get("startLine") and b.get("endLine") else ""
+            where = f"In `{rel}`{lines}"
+        lang = re.sub(r"[^\w+#.-]", "", (b.get("language") or "").lower())
+        parts = [IDE_ACTIONS[action]] if IDE_ACTIONS[action] else []
+        if sel.strip():
+            parts.append(f"{where}:\n\n```{lang}\n{sel}\n```" if where else f"```{lang}\n{sel}\n```")
+        elif where:
+            parts.append(where + " (the whole file).")
+        prompt = "\n\n".join(parts) + ("\n\n" if action == "ask" else "")
+    with _subs_lock:
+        windows = len(_subs)
+    emit({"type": "ide_context", "project": project, "prompt": prompt, "send": False, "ide": b.get("ide") or "JetBrains IDE"})
+    return {"ok": True, "delivered": windows}
+
+
+def chat_outputs(prof, cid):
+    d = prof.dir / "outputs" / cid
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def new_outputs(prof, cid, project, since):
+    """Files made for the user during a turn: everything new in the chat's outputs folder, plus deliverable-type files
+    (archives, documents, images, media, app packages) created or changed in the project."""
+    found = []
+    for f in sorted(chat_outputs(prof, cid).rglob("*")):
+        if f.is_file() and f.stat().st_mtime >= since:
+            found.append(f)
+    root, seen = Path(project), 0
+    for base, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+        for n in names:
+            seen += 1
+            f = Path(base) / n
+            if f.suffix.lower() in DELIVERABLE_EXT:
+                try:
+                    if f.stat().st_mtime >= since:
+                        found.append(f)
+                except OSError:
+                    pass
+        if seen > 20000:
+            break
+    out = []
+    for f in found[:40]:
+        st = f.stat()
+        out.append({"name": f.name, "path": str(f), "size": st.st_size, "kind": "image" if f.suffix.lower() in IMAGE_TYPES else "file",
+                    "mime": mimetypes.guess_type(f.name)[0] or "application/octet-stream"})
+    return out
 
 
 _claude_flags = {}
@@ -2803,7 +2939,7 @@ def save_upload(prof, name, data):
 def allowed_file(prof, path):
     """Files the UI may open/download: inside a known project or this profile's uploads."""
     f = Path(path).expanduser().resolve()
-    roots = [(prof.dir / "uploads").resolve()] + [Path(p["path"]).resolve() for p in discover()]
+    roots = [(prof.dir / "uploads").resolve(), (prof.dir / "outputs").resolve()] + [Path(p).resolve() for p in project_paths()]
     if not f.is_file() or not any(f.is_relative_to(r) for r in roots):
         raise ValueError("File not found or not inside one of your projects")
     return f
@@ -3334,6 +3470,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._app_auth(qs):
             return self._send(401, {"error": "unauthorized"})
         try:
+            if u.path == "/api/ide/ping":  # JetBrains plugin: is Forge up?
+                return self._send(200, {"ok": True, "version": APP_VERSION, "windows": len(_subs)})
             if u.path == "/api/auth/profiles":
                 return self._send(200, {"profiles": [public_profile(p) for p in CONFIG["profiles"]],
                                         "google": bool(google_cfg()), "redirect": ORIGIN,
@@ -3403,6 +3541,14 @@ class Handler(BaseHTTPRequestHandler):
                     f = project_file(arg("project"), rel)[1]
                     out[rel] = f.stat().st_mtime_ns if f.is_file() else None
                 return self._send(200, {"mtimes": out, "root": str(root)})
+            if u.path == "/api/code/zip":
+                root, d = project_file(arg("project"), arg("path"), real=True)
+                if not d.is_dir():
+                    raise ValueError("Pick a folder")
+                data = zip_folder(d)
+                name = (d.name or root.name) + ".zip"
+                return self._send(200, data, "application/zip",
+                                  {"Content-Disposition": f"attachment; filename*=UTF-8''{urllib.parse.quote(name)}"})
             if u.path == "/api/code/files":
                 return self._send(200, {"files": code_files(arg("project"))})
             if u.path == "/api/code/search":
@@ -3455,6 +3601,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self._app_auth(parse_qs(u.query)):
             return self._send(401, {"error": "unauthorized"})
         n = int(self.headers.get("Content-Length") or 0)
+        if u.path == "/api/ide/context":  # JetBrains plugin: selection / file → Forge's chat box
+            try:
+                b = json.loads(self.rfile.read(n) or b"{}")
+                return self._send(200, ide_context(b))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
         if u.path == "/api/upload":
             pid = login_profile(self.headers.get("X-Login"))
             if not pid:
@@ -3582,7 +3734,8 @@ class Handler(BaseHTTPRequestHandler):
         # ---- chats
         if path == "/api/chat/send":
             cid = start_chat(prof, project, b.get("prompt", ""), b.get("chat"), b.get("model"), b.get("mode"),
-                             b.get("provider"), b.get("files"), b.get("agent") or "claude")
+                             b.get("provider"), b.get("files"), b.get("agent") or "claude",
+                             {"effort": b.get("effort"), "fast": b.get("fast"), "style": b.get("style")})
             return {"chat": cid}
         if path == "/api/chat/stop":
             run = RUNS.get(b.get("chat"))

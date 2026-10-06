@@ -346,6 +346,7 @@
         <ul id="historyList"></ul>
       </div>
       <div class="messages" id="messages"></div>
+      <div class="next-actions" id="nextActions" hidden></div>
       <form class="composer" id="composer">
         <div class="drop-hint" id="dropHint">Drop files to attach</div>
         <div class="attachments" id="attachments" hidden></div>
@@ -356,6 +357,14 @@
           <select id="agent" title="Agent CLI"></select>
           <select id="model" title="Model"></select>
           <input id="customModel" placeholder="model id" size="14" hidden>
+          <select id="style" title="Agent: build and change things · Plan: research and propose, no edits · Chat: just talk, no tools (Shift+Tab cycles)">
+            <option value="agent">Agent</option><option value="plan">Plan</option><option value="chat">Chat</option>
+          </select>
+          <select id="effort" title="Reasoning effort: how hard the model thinks (Claude Code)">
+            <option value="">Reasoning: auto</option><option value="low">Low</option><option value="medium">Medium</option>
+            <option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Max</option>
+          </select>
+          <button type="button" class="icon-btn" id="btnFast" title="Fast mode: quicker answers from the same model (Claude Code, supported models only)"><svg class="ic"><use href="#i-zap"/></svg></button>
           <select id="mode" title="What the agent may do without asking you">
             <option value="ask">Ask before acting</option>
             <option value="acceptEdits">Auto-edit, ask for commands</option>
@@ -504,6 +513,13 @@
 </dialog>
 <div class="menu" id="ctxMenu" hidden></div>
 
+<!-- ============ KEYBOARD SHORTCUTS ============ -->
+<dialog id="dlgKeys" class="sheet">
+  <h3>Keyboard shortcuts</h3>
+  <div class="keys" id="keysList"></div>
+  <div class="row end"><button class="btn" id="keysClose">Close</button></div>
+</dialog>
+
 <!-- ============ SETTINGS ============ -->
 <dialog id="dlgSettings" class="settings">
   <div class="settings-win">
@@ -530,6 +546,7 @@
 
       <section data-sec="general">
         <h2>General</h2>
+        <div class="form-group"><div class="form-row"><span>Keyboard shortcuts <span class="dim">(F1)</span></span><button class="btn" id="btnKeys"><svg class="ic"><use href="#i-keyboard"/></svg> Show</button></div></div>
         <div class="form-group">
           <div class="form-row"><span>Appearance</span>
             <div class="segmented" id="themeSeg">

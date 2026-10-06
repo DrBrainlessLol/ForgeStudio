@@ -875,3 +875,30 @@ body:not([data-mode="agent"]) .layout.no-agent .chat, body:not([data-mode="agent
 .msg del { color: var(--dim); }
 .msg li.task { list-style: none; margin-left: -1.2em; }
 .msg li.task input { vertical-align: -2px; margin-right: 4px; }
+/* long file trees, search results, the Git panel and pop-up menus (project / branch lists) scroll instead of clipping */
+.code-view > .tree, .code-view > .results, .code-view > .git-body { flex: 1; min-height: 0; overflow: auto; }
+.menu { max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; }
+
+/* ---------- composer modes, fast toggle, next-step chips, files, shortcuts ---------- */
+#btnFast.on { color: var(--warn); background: var(--warn-soft); }
+#style { font-weight: 600; }
+.next-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 14px 8px; }
+body[data-mode="agent"] .next-actions { width: min(820px, calc(100% - 28px)); margin: 0 auto 8px; }
+body:not([data-mode="agent"]) .chat .next-actions { margin: 0 10px 8px; }
+.chip.next { border-style: solid; border-color: var(--accent-ring); color: var(--accent); background: var(--accent-soft); }
+.chip.next:hover { filter: brightness(1.15); }
+.outputs { border: 0.5px solid var(--line-strong); border-radius: 10px; background: var(--surface); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.outputs-head { display: flex; align-items: center; gap: 6px; font-size: .9em; font-weight: 600; color: var(--ok); padding: 0 4px; }
+.outputs-head .ic { width: 14px; height: 14px; }
+.out-file { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 8px; background: var(--bg); border: 0.5px solid var(--line); }
+.out-file img { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; flex: none; }
+.out-ext { width: 40px; height: 40px; border-radius: 6px; flex: none; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font: 600 10.5px var(--mono); text-transform: uppercase; }
+.out-file .grow { display: flex; flex-direction: column; min-width: 0; }
+.out-file b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.out-file small { color: var(--dim); }
+.out-file a.btn { text-decoration: none; }
+.out-file a.btn:not(.primary) { color: var(--text); }
+.keys h4:first-child { margin-top: 0; }
+.kbd { white-space: nowrap; color: var(--dim); }
+kbd { display: inline-block; min-width: 20px; padding: 1px 6px; border-radius: 5px; border: 0.5px solid var(--line-strong); border-bottom-width: 1.5px; background: var(--control); color: var(--text); font: 11px var(--mono); text-align: center; }
+#dlgKeys { width: min(560px, 92vw); max-height: 86vh; overflow: auto; }
