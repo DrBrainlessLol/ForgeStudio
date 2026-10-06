@@ -1456,7 +1456,7 @@ DELIVERABLE_EXT = {".zip", ".tar", ".gz", ".tgz", ".7z", ".pdf", ".docx", ".doc"
                    ".ogg", ".mp4", ".webm", ".apk", ".aab", ".ipa", ".dmg", ".deb", ".exe", ".msi"}
 
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 ZIP_SKIP = {".git", "node_modules", "__pycache__", ".gradle", ".dart_tool", ".idea", ".kotlin"}
 
 
