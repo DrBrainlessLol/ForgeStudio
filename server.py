@@ -1457,6 +1457,26 @@ DELIVERABLE_EXT = {".zip", ".tar", ".gz", ".tgz", ".7z", ".pdf", ".docx", ".doc"
 
 
 APP_VERSION = "1.1.0"
+SERVER_FILE = Path(__file__).resolve()
+SERVER_MTIME = SERVER_FILE.stat().st_mtime  # an update replaces this file; the running server then knows it's stale
+
+
+def server_stale():
+    try:
+        return SERVER_FILE.stat().st_mtime != SERVER_MTIME
+    except OSError:
+        return False
+
+
+def restart_server():
+    """Replace this process with a fresh copy of the (updated) server. Agent tasks and builds stop first."""
+    time.sleep(0.4)  # let the HTTP reply go out
+    for rec in list(PROCS.values()):
+        if rec["kind"] not in ("emulator", "scrcpy"):
+            kill_proc(rec["id"])
+    for r in list(RUNS.values()):
+        r.stop()
+    os.execv(sys.executable, [sys.executable, str(SERVER_FILE)] + sys.argv[1:])
 ZIP_SKIP = {".git", "node_modules", "__pycache__", ".gradle", ".dart_tool", ".idea", ".kotlin"}
 
 
@@ -3489,6 +3509,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect(f"/#token={TOKEN}&login={login}")
             except Exception as e:
                 return self._send(400, LOGIN_PAGE.format(msg=str(e).replace("<", "&lt;")), "text/html; charset=utf-8")
+        if u.path == "/api/version":  # the launcher: is the running server the installed version?
+            return self._send(200, {"version": APP_VERSION, "stale": server_stale(), "pid": os.getpid()})
         if u.path == "/api/bootstrap":
             # Hand the app token to pages opened on this computer only: loopback socket, localhost Host
             # header, not the LAN listener, and a same-origin request (other websites can't read it).
@@ -3633,6 +3655,8 @@ class Handler(BaseHTTPRequestHandler):
                        "running": r["popen"].poll() is None, "meta": r["meta"]} for r in PROCS.values()],
             "flutter": {k: {"started": v["started"], "device": v["device"], "auto": v["auto"], "url": v["url"]}
                         for k, v in FLUTTER_RUNS.items()},
+            "version": APP_VERSION,
+            "stale": server_stale(),
             "settings": {"studio_path": CONFIG["settings"].get("studio_path"),
                          "hideTest": bool(CONFIG["settings"].get("hideTest")),
                          "jbMcp": CONFIG["settings"].get("jbMcp") is not False,
@@ -3785,6 +3809,9 @@ class Handler(BaseHTTPRequestHandler):
                 CONFIG["settings"]["jbMcpUrl"] = url
             _jb_cache["t"] = 0
             save_config()
+            return None
+        if path == "/api/app/restart":
+            threading.Thread(target=restart_server, daemon=True).start()
             return None
         if path == "/api/ide/mcp":
             return {"enabled": CONFIG["settings"].get("jbMcp") is not False, "url": jetbrains_mcp(fresh=True)}

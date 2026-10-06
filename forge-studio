@@ -8,6 +8,23 @@ CONF="$HOME/.config/forge-studio"
 LOG="$CONF/server.log"
 mkdir -p "$CONF"
 
+# A server left running from before an update keeps serving its old code to the new pages: replace it.
+server_pid() {  # the Forge Studio server listening on $PORT, if any
+  local p=""
+  p=$(curl -fs "http://127.0.0.1:$PORT/api/version" 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("pid",""))' 2>/dev/null) || p=""
+  [ -z "$p" ] && command -v lsof >/dev/null && p=$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null | head -1)
+  [ -z "$p" ] && command -v ss >/dev/null && p=$(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+  [ -n "$p" ] && ps -o args= -p "$p" 2>/dev/null | grep -q 'server\.py' && echo "$p"
+}
+if curl -fs -o /dev/null "http://127.0.0.1:$PORT/"; then
+  WANT=$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' "$DIR/server.py")
+  RUNNING=$(curl -fs "http://127.0.0.1:$PORT/api/version" 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print("stale" if d.get("stale") else d.get("version",""))' 2>/dev/null || true)
+  if [ "$RUNNING" != "$WANT" ] && OLD=$(server_pid) && [ -n "$OLD" ]; then
+    kill "$OLD" 2>/dev/null || true
+    for _ in $(seq 50); do curl -fs -o /dev/null "http://127.0.0.1:$PORT/" || break; sleep 0.1; done
+  fi
+fi
+
 if ! curl -fs -o /dev/null "http://127.0.0.1:$PORT/"; then
   if command -v setsid >/dev/null; then
     setsid nohup python3 "$DIR/server.py" >"$LOG" 2>&1 < /dev/null &

@@ -812,6 +812,7 @@ async function selectProject(path) {
 }
 async function loadState() {
   const st = await api("/api/state");
+  checkUpdated(st);  // first, so it shows even if an old server's answer breaks something below
   Object.assign(S, { profile: st.profile, projects: st.projects, tools: st.tools, previews: st.previews, procs: st.procs,
     providers: st.providers, settings: st.settings, agents: st.agents, plugins: st.plugins || [], prefs: st.prefs || {}, web: st.web,
     flutter: st.flutter || {} });
@@ -822,6 +823,29 @@ async function loadState() {
   applyAppearance(S.prefs);
   renderProfile(); renderProjects(); renderTools(); renderAgents();
 }
+// The installed files were updated but the server that's running is still the old one: its answers no longer match
+// these pages, so offer a restart (servers from before 1.1.0 can't restart themselves: quit and reopen).
+function checkUpdated(st) {
+  const stale = st.stale || !st.version;
+  $("#updateBar").hidden = !stale;
+  if (!stale) return;
+  const busy = (st.running || []).length;
+  $("#updateText").textContent = st.version
+    ? `Forge Studio was updated. Restart it to finish${busy ? ` (stops ${busy} running agent task${busy > 1 ? "s" : ""})` : ""}.`
+    : "Forge Studio was updated, but the old version is still running. Quit Forge Studio and open it again from your app menu.";
+  $("#btnRestartApp").hidden = !st.version;
+}
+$("#btnRestartApp").onclick = act(async () => {
+  $("#btnRestartApp").disabled = true;
+  $("#updateText").textContent = "Restarting…";
+  await api("/api/app/restart", {});
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    try { const r = await fetch("/api/version"); if (r.ok && !(await r.json()).stale) return location.reload(); } catch {}
+  }
+  $("#btnRestartApp").disabled = false;
+  toast("Forge Studio didn't come back. Open it again from your app menu.", true);
+});
 
 // ============================================================ sign-in
 function avatarHtml(p) {

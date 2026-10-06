@@ -900,3 +900,8 @@ body:not([data-mode="agent"]) .chat .next-actions { margin: 0 10px 8px; }
 .kbd { white-space: nowrap; color: var(--dim); }
 kbd { display: inline-block; min-width: 20px; padding: 1px 6px; border-radius: 5px; border: 0.5px solid var(--line-strong); border-bottom-width: 1.5px; background: var(--control); color: var(--text); font: 11px var(--mono); text-align: center; }
 #dlgKeys { width: min(560px, 92vw); max-height: 86vh; overflow: auto; }
+
+/* Forge Studio was updated while its server kept running */
+.update-bar { position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; background: var(--control); border: 0.5px solid var(--accent); border-radius: 12px; box-shadow: var(--shadow); max-width: calc(100vw - 24px); }
+.update-bar[hidden] { display: none; }
+.update-bar > .ic { color: var(--accent); flex: none; }
