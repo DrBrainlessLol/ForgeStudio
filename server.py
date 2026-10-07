@@ -1760,7 +1760,7 @@ def start_preview(project, directory, command=None):
         rec = start_proc(command, str(d), "preview", project, f"preview: {command}", shell=True, env=env,
                          on_line=lambda l: (m := URL_RE.search(ANSI_RE.sub("", l))) and set_url(m.group(0)))
     else:
-        rec = start_proc([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "-d", str(d)],
+        rec = start_proc([sys.executable, str(Path(__file__).resolve()), "--static", str(port), str(d)],
                          str(d), "preview", project, "preview: static", env=env)
         set_url(f"http://127.0.0.1:{port}/")
         threading.Thread(target=watch_files, args=(project, d, state["stop"]), daemon=True).start()
@@ -4130,7 +4130,23 @@ def shutdown(*_):
     os._exit(0)
 
 
+def serve_static(port, folder):
+    """The preview's static server: like `python -m http.server`, but tells the browser not to cache, so live reload
+    also picks up edited CSS, JS and images (a plain reload re-fetches the page but may reuse cached subresources)."""
+    import functools
+    from http.server import SimpleHTTPRequestHandler
+
+    class NoCache(SimpleHTTPRequestHandler):
+        def end_headers(self):
+            self.send_header("Cache-Control", "no-store")
+            super().end_headers()
+
+    ThreadingHTTPServer(("127.0.0.1", int(port)), functools.partial(NoCache, directory=folder)).serve_forever()
+
+
 def main():
+    if len(sys.argv) > 3 and sys.argv[1] == "--static":
+        return serve_static(sys.argv[2], sys.argv[3])
     if len(sys.argv) > 2 and sys.argv[1] == "--setup":  # a toolchain installer, started by setup_install / add_wrapper
         sys.exit(run_setup(sys.argv[2:]))
     signal.signal(signal.SIGTERM, shutdown)

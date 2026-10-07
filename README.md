@@ -13,6 +13,26 @@ A lightweight desktop studio for AI coding agents, with built-in Android and Flu
 
 It uses only the Python standard library and plain HTML/CSS/JS with no build step, and runs as a desktop web app (Chromium app window, installable PWA, optional LAN access).
 
+<p align="center">
+  <img src="docs/media/forge-studio-demo.gif" width="900" alt="Forge Studio: the agent adds a dark theme to a website, the live preview updates, then the change is reviewed in the Git diff">
+  <br><sub>The agent adds a dark theme to a site while the live preview updates, then the change is reviewed in Git. <a href="docs/media/forge-studio-demo.mp4">Full-quality video (MP4)</a></sub>
+</p>
+
+<table>
+  <tr>
+    <td><img src="docs/media/02-agent-fixes-a-bug.png" alt="The agent finds and fixes a crash, runs the tests and explains the fix"><br><sub><b>Agent</b>: thinking, tool calls and test runs you can expand</sub></td>
+    <td><img src="docs/media/04-editor-with-agent.png" alt="Editor with the file tree, a Kotlin file and the agent docked on the right"><br><sub><b>Editor</b>: files, search and Git with the agent beside you</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/03-model-and-reasoning-picker.png" alt="One picker for agent, model, reasoning effort and fast mode"><br><sub>One picker for agent, model, reasoning and fast mode</sub></td>
+    <td><img src="docs/media/05-git-diff.png" alt="Source control with changed files and a side-by-side diff"><br><sub>Review every change in the Git panel</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/06-downloadable-files.png" alt="A PDF the agent made, with Open and Download buttons"><br><sub>Files the agent makes for you: PDFs, zips, docs, images</sub></td>
+    <td><img src="docs/media/08-light-theme-home.png" alt="Light theme home screen with recent conversations and a live website preview"><br><sub>Light and dark themes, conversations grouped by project</sub></td>
+  </tr>
+</table>
+
 ## Requirements
 - **Linux or macOS** with Python 3.8+ and a browser (Chrome / Chromium / Edge / Brave for an app window). macOS support is new and less tested than Linux; on Windows, use WSL2.
 - Everything else is optional and can be installed from **Settings → Setup**, which opens on first launch: one click per tool, the latest version from the official source, into your home folder (no admin password):
