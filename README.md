@@ -33,6 +33,35 @@ It uses only the Python standard library and plain HTML/CSS/JS with no build ste
   </tr>
 </table>
 
+## How it's different from VS Code, Cursor, Android Studio and other IDEs
+
+Most IDEs are built for **you** to write code, and add AI on top. Forge Studio is built for **the agent** to write code while you steer, review and run it. The editor, Git, previews and Android tools are there so you can check and finish the agent's work without switching apps.
+
+| | Forge Studio | VS Code / Cursor / Windsurf | Android Studio / IntelliJ |
+|---|---|---|---|
+| Built around | Agent conversations, plans and approvals | Your editor; AI as a side panel | Your editor; deep language tooling |
+| Runs on | Python's standard library + a browser tab you already have | Electron (its own Chromium + Node.js) | Java (JVM) with large indexes |
+| Download / installed | **~450 KB / ~1.1 MB** | hundreds of MB | ~1 GB+, several GB with the SDK |
+| Memory (app itself) | **~40–70 MB** server + one browser tab | several processes, often 500 MB–1 GB+ | often 2–4 GB+; 8 GB RAM is the stated minimum for Android Studio |
+| Starts in | **~0.2 s** (server) | seconds | tens of seconds, plus indexing |
+| Which AI | Claude Code, Codex, Gemini CLI, Qwen, opencode, Aider, any CLI, or your own API key | mostly the vendor's own models/plans | vendor plugins |
+| Android | Gradle builds, live phone screen (up to 120 fps), logcat, crash → "Ask to fix", no Android Studio needed | extensions | full suite |
+| Use from your phone or another PC | built in (LAN web app with a token) | remote extensions / tunnels | no |
+| Open source | AGPL-3.0, no account or telemetry | varies | partly |
+
+*Sizes and memory for other tools vary by version, extensions and project size. Forge Studio's numbers are measured on Linux with the 1.2.0 package.*
+
+### Why it suits older and lower-end PCs
+- **Almost nothing to install.** There's no bundled browser, Node.js or JVM. It's one Python file plus static HTML/CSS/JS with no framework and no build step, so it fits on any disk and installs in seconds.
+- **The heavy lifting happens elsewhere.** The AI runs in the cloud (or wherever your provider is), and Forge only streams the conversation. A 4 GB laptop or a Chromebook with Linux can drive the same agent as a workstation.
+- **No background indexing.** There's no language server or indexer eating CPU while you work, and the agent reads files when it needs them.
+- **Long chats stay fast.** Only the latest messages are rendered, earlier ones load on demand, and off-screen messages skip layout.
+- **Android without Android Studio.** Build, install, mirror and debug apps with just the SDK command-line tools, a JDK and Gradle. Settings → Setup installs them. That saves gigabytes of disk and RAM.
+- **Run it on a stronger machine and use it from a weaker one.** Start Forge on a desktop or home server and open it from an old laptop, tablet or phone over your network.
+
+### When another IDE is the better tool
+Forge's editor has syntax highlighting, search, quick open and Git, but **no language server**: no autocomplete, go-to-definition, refactorings or breakpoint debugger. If you write most code by hand or need those, keep your IDE and use Forge next to it. The [JetBrains plugin](#jetbrains-ides) and "Open in Forge Studio" from Android Studio make that easy, and with the IDE's MCP server on, the agent can even use your IDE's refactorings and inspections.
+
 ## Requirements
 - **Linux or macOS** with Python 3.8+ and a browser (Chrome / Chromium / Edge / Brave for an app window). macOS support is new and less tested than Linux; on Windows, use WSL2.
 - Everything else is optional and can be installed from **Settings → Setup**, which opens on first launch: one click per tool, the latest version from the official source, into your home folder (no admin password):
