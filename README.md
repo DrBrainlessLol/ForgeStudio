@@ -106,10 +106,10 @@ A built-in editor and Git client, no external tools bundled:
 
 ## Install / packaging
 The [one-line installer](#install) is the easiest way. Packages are also attached to every [GitHub release](https://github.com/DrBrainlessLol/ForgeStudio/releases) (built with `packaging/build.sh` into `packaging/dist/`):
-- **Debian / Ubuntu / Deepin:** `sudo apt install ./forge-studio_1.1.1_all.deb`
-- **Arch:** `sudo pacman -U forge-studio-1.1.1-1-any.pkg.tar.zst` (or `makepkg -si` with the `PKGBUILD`)
+- **Debian / Ubuntu / Deepin:** `sudo apt install ./forge-studio_1.2.0_all.deb`
+- **Arch:** `sudo pacman -U forge-studio-1.2.0-1-any.pkg.tar.zst` (or `makepkg -si` with the `PKGBUILD`)
 - **Fedora / openSUSE:** build the RPM with `forge-studio.spec`
-- **Any distro:** extract `forge-studio-1.1.1.tar.gz` and run `sudo ./install.sh` (or `./install.sh --user`)
+- **Any distro:** extract `forge-studio-1.2.0.tar.gz` and run `sudo ./install.sh` (or `./install.sh --user`)
 
 See `packaging/README.md` for details.
 
@@ -128,7 +128,7 @@ See `packaging/README.md` for details.
 - Attach images and files with the clip, by pasting, or by drag & drop. Images go to the model directly; other files are passed as paths.
 - Files the agent writes get **Open / Download** buttons, and file paths in replies get a download link.
 - **History** lets you reopen, rename and delete conversations. They're per profile.
-- **Tasks** in the Agent sidebar show which chats are working and which just finished, across projects.
+- The sidebar lists every project with its recent conversations: running ones spin, finished ones get a dot. They're saved, so they're still there after a restart.
 - Tool cards expand to the full command and output, with copy buttons. Long chats show the latest 150 messages with **Show earlier messages** to load more, so they open quickly.
 - **Notifications**: a short chime and, when Forge Studio isn't the active window, a system notification when the agent needs approval, a task finishes, a Gradle build ends or your app crashes. Each can be turned off in Settings → General.
 

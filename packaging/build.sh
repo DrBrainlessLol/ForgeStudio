@@ -3,7 +3,7 @@
 # Produces (into ./dist): a .deb, a universal .tar.gz + install.sh, an Arch .pkg.tar.zst,
 # and copies of PKGBUILD / forge-studio.spec for building on those distros.
 set -euo pipefail
-VERSION="${VERSION:-1.1.1}"
+VERSION="${VERSION:-1.2.0}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 DIST="$HERE/dist"

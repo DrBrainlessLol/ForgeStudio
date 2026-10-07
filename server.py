@@ -1456,7 +1456,7 @@ DELIVERABLE_EXT = {".zip", ".tar", ".gz", ".tgz", ".7z", ".pdf", ".docx", ".doc"
                    ".ogg", ".mp4", ".webm", ".apk", ".aab", ".ipa", ".dmg", ".deb", ".exe", ".msi"}
 
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.2.0"
 SERVER_FILE = Path(__file__).resolve()
 SERVER_MTIME = SERVER_FILE.stat().st_mtime  # an update replaces this file; the running server then knows it's stale
 
