@@ -1201,3 +1201,11 @@ dialog { border-radius: 18px; box-shadow: var(--pop-shadow); }
   .chat, .panel, .codepane, .droidpane { border-radius: 12px; margin-bottom: 6px; }
   .style-seg button { padding: 0 8px; }
 }
+
+/* status line between steps: a small spinner and a shimmering "Working…" (hidden while a step shows its own progress) */
+#typing { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; padding: 3px 8px 3px 4px; color: var(--dim); }
+#typing[hidden] { display: none; }
+#typing::before { display: none; }
+.typing-spin { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--accent-ring); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
+.typing-label { background: linear-gradient(90deg, var(--dim) 30%, var(--text) 50%, var(--dim) 70%); background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.6s linear infinite; }

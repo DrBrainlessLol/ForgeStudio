@@ -467,6 +467,7 @@ function onChat(cid, projectPath, ev) {
   if (ev.type === "ui_end") delete S.running[cid];
   const { pushed, changed } = applyEvent(S.items[cid], ev);
   const visible = cid === chatId();
+  if (visible) S.lastEv = Date.now();
   if (visible) {
     const box = $("#messages");
     const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
@@ -537,7 +538,9 @@ function updateBusy() {
   $("#btnStop").hidden = !busy;
   $("#btnSend").disabled = !S.cur || busy;
   $("#typing")?.remove();
+  clearInterval(S.typingT);
   if (busy) {
+    S.typingT = setInterval(refreshTyping, 500);
     const t = document.createElement("button"); t.id = "typing"; t.className = "typing"; t.title = "Show what the agent is doing";
     t.onclick = () => {
       const it = currentStep(cid);
@@ -563,10 +566,12 @@ function currentStep(cid) {
 function refreshTyping() {
   const t = $("#typing");
   if (!t) return;
+  // a live "Thinking…", a running tool card or an approval card already shows what's happening, and streaming text
+  // shows itself; the status line only fills the quiet gaps between steps, so it never repeats the item above it
   const it = currentStep(chatId());
-  const what = !it ? "Working…" : it.k === "think" ? "Thinking…" : it.k === "approval" ? "Waiting for your approval"
-    : it.k === "text" ? "Writing…" : `${it.name === "Bash" ? "Running" : it.name}: ${toolArg(it.input).replace(/\s+/g, " ").slice(0, 70)}…`;
-  t.textContent = what;
+  const quiet = Date.now() - (S.lastEv || 0) > 1500;
+  t.hidden = (it && it.k !== "text") || !quiet;
+  if (!t.hidden && !t.firstChild) t.innerHTML = '<span class="typing-spin"></span><span class="typing-label">Working…</span>';
 }
 async function openChat(cid) {
   if (!S.cur) return;
