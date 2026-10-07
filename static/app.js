@@ -411,7 +411,7 @@ function renderChat() {
   $("#agentPill").hidden = !ag || ag === "claude";
   $("#agentPill").textContent = S.agents.find((a) => a.id === ag)?.name || "";
   if (!S.cur) {
-    $("#chatPane").classList.remove("home"); $("#homeChips").hidden = true;
+    $("#chatPane").classList.remove("home"); $("#homeChips").hidden = true; $("#homeRecent").hidden = true;
     box.innerHTML = `<div class="empty"><img src="logo.png" alt=""><h2>Welcome to Forge Studio</h2><p>Pick a project in the sidebar, or start one below. Switch between <b>Agent</b>, <b>Editor</b> and <b>Android</b> / <b>Flutter</b> at the top — the agent comes with you.</p>
       <div class="tiles" id="welcomeTiles">
         <div class="tile" data-w="open">${ic("folder")}<span class="label">Open Project</span></div>
@@ -431,6 +431,7 @@ function renderChat() {
   const home = !items.length && S.mode === "agent";
   $("#chatPane").classList.toggle("home", home);
   $("#homeChips").hidden = !home;
+  $("#homeRecent").hidden = true;
   if (home) { renderHome(box); updateBusy(); return; }
   if (!items.length) box.innerHTML = `<div class="empty"><h2>${esc(project()?.name)}</h2><p>Ask the agent to build, fix or explain something. Attach screenshots, designs or files with the clip.</p><p class="dim">Earlier conversations are in the menu at the top.</p></div>`;
   const start = Math.max(0, items.length - (S.chatWindow || CHAT_WINDOW));
@@ -456,6 +457,7 @@ function renderChat() {
 const CHAT_WINDOW = 150;  // items rendered at once; long chats grow on demand
 const pending = new Set();
 function onChat(cid, projectPath, ev) {
+  if (ev.type === "user" || ev.type === "ui_start" || ev.type === "ui_end") touchRecent(cid, projectPath, ev);
   if (!S.items[cid]) {
     if (ev.type !== "user") { if (ev.type === "ui_start") S.running[cid] = projectPath; if (ev.type === "ui_end") delete S.running[cid]; renderProjects(); return; }
     S.items[cid] = [];
@@ -468,7 +470,7 @@ function onChat(cid, projectPath, ev) {
   if (visible) {
     const box = $("#messages");
     const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
-    if (pushed.length && $("#chatPane").classList.contains("home")) { $("#chatPane").classList.remove("home"); $("#homeChips").hidden = true; box.innerHTML = ""; }
+    if (pushed.length && $("#chatPane").classList.contains("home")) { $("#chatPane").classList.remove("home"); $("#homeChips").hidden = true; $("#homeRecent").hidden = true; box.innerHTML = ""; }
     if (pushed.length) box.querySelector(".empty")?.remove();
     for (const it of pushed) box.insertBefore(renderItem(it), $("#typing"));
     for (const it of changed) pending.add(it);
@@ -609,15 +611,109 @@ function agentChanged(save = true) {
   $("#effort").hidden = $("#btnFast").hidden = kind !== "claude";
   styleChanged(false);
   renderModels();
+  syncComposer();
 }
 function styleChanged(save = true) {
   const st = $("#style").value;
+  syncComposer();
   $("#mode").disabled = st !== "agent" || currentAgent()?.kind === "generic";
   $("#prompt").placeholder = st === "plan" ? "Describe what you want — the agent researches and proposes a plan, without changing files"
     : st === "chat" ? "Ask anything — chat only, the agent won't run tools or touch files"
     : "Message the agent — attach images or files with the clip, paste, or drag & drop";
   if (save) store.set(pkey("style"), st);
 }
+const PERM_SHORT = { ask: "Ask first", acceptEdits: "Auto-edit", auto: "Auto", bypassPermissions: "Full access", plan: "Read-only" };
+const PERM_INFO = {
+  ask: "Every change and command waits for your OK", acceptEdits: "Edits files on its own, asks before commands",
+  auto: "Acts on its own, asks only when unsure", bypassPermissions: "Never asks: edits, commands, installs", plan: "Looks around, changes nothing",
+};
+const EFFORT_SHORT = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
+function syncComposer() {
+  const ag = $("#agent").selectedOptions[0]?.textContent || "Agent";
+  const mo = $("#model").selectedOptions[0];
+  let model = mo ? mo.textContent.replace(/ — .*/, "") : "";
+  if (mo?.value.endsWith("::__custom")) model = $("#customModel").value.trim() || "Custom model";
+  if (/^Default/.test(model)) model = "";
+  const effort = !$("#effort").hidden && EFFORT_SHORT[$("#effort").value];
+  const fast = !$("#btnFast").hidden && $("#btnFast").classList.contains("on");
+  $("#engineLabel").innerHTML = [esc(ag), model && `<b>${esc(model)}</b>`, effort && esc(effort)].filter(Boolean).join('<i class="sep">·</i>') + (fast ? ` ${ic("zap")}` : "");
+  $("#engineChip").classList.toggle("fast", fast);
+  const m = $("#mode").value;
+  $("#permLabel").textContent = PERM_SHORT[m] || m;
+  $("#permChip").dataset.level = m;
+  $("#permChip").disabled = $("#mode").disabled;
+  $("#permChip").title = $("#mode").disabled ? ($("#style").value !== "agent" ? "Plan and Chat never change anything" : "This agent manages its own permissions") : "What the agent may do without asking you: " + (PERM_INFO[m] || "");
+  $$("#styleSeg button").forEach((b) => b.classList.toggle("active", b.dataset.style === $("#style").value));
+}
+function popover(anchor, build) {
+  closePopover();
+  const pop = document.createElement("div");
+  pop.className = "popover"; pop.id = "popover";
+  document.body.append(pop);
+  build(pop);
+  const r = anchor.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + "px";
+  pop.style.top = (r.top - h - 8 > 8 ? r.top - h - 8 : Math.min(r.bottom + 8, innerHeight - h - 8)) + "px";
+  setTimeout(() => document.addEventListener("pointerdown", outside, true));
+  function outside(e) { if (!pop.contains(e.target) && !anchor.contains(e.target)) closePopover(); }
+  pop._off = () => document.removeEventListener("pointerdown", outside, true);
+  return pop;
+}
+function closePopover() { const p = $("#popover"); if (p) { p._off?.(); p.remove(); } }
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#popover")) { closePopover(); e.stopPropagation(); } }, true);
+const pickSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new Event("change", { bubbles: true })); syncComposer(); };
+function openEnginePop() {
+  popover($("#engineChip"), (pop) => {
+    pop.classList.add("engine-pop");
+    const agents = [...$("#agent").options].map((o) => `<button class="pop-item${o.value === $("#agent").value ? " on" : ""}" data-agent="${esc(o.value)}">${ic("bot")}<span>${esc(o.textContent)}</span>${o.value === $("#agent").value ? ic("check") : ""}</button>`).join("");
+    const models = [...$("#model").children].map((g) => g.tagName === "OPTGROUP"
+      ? `<div class="pop-sub">${esc(g.label)}</div>` + [...g.children].map((o) => `<button class="pop-item${o.value === $("#model").value ? " on" : ""}" data-model="${esc(o.value)}"><span>${esc(o.textContent)}</span>${o.value === $("#model").value ? ic("check") : ""}</button>`).join("")
+      : `<button class="pop-item${g.value === $("#model").value ? " on" : ""}" data-model="${esc(g.value)}"><span>${esc(g.textContent)}</span>${g.value === $("#model").value ? ic("check") : ""}</button>`).join("");
+    const claude = !$("#effort").hidden;
+    pop.innerHTML = `<div class="pop-cols"><div class="pop-col"><div class="pop-h">Agent</div>${agents}</div><div class="pop-col models"><div class="pop-h">Model</div>${models}</div></div>`
+      + (claude ? `<div class="pop-foot"><div class="pop-h">Reasoning</div><div class="pop-seg">${[["", "Auto"], ...Object.entries(EFFORT_SHORT)].map(([v, t]) => `<button data-effort="${v}" class="${$("#effort").value === v ? "on" : ""}">${t}</button>`).join("")}</div>
+        <label class="pop-toggle">${ic("zap")}<span><b>Fast mode</b><small>Quicker answers from the same model (supported models)</small></span><span class="switch"><input type="checkbox" id="popFast" ${$("#btnFast").classList.contains("on") ? "checked" : ""}><i></i></span></label></div>` : "");
+    pop.querySelectorAll("[data-agent]").forEach((b) => (b.onclick = () => { pickSelect($("#agent"), b.dataset.agent); openEnginePop(); }));
+    pop.querySelectorAll("[data-model]").forEach((b) => (b.onclick = () => { pickSelect($("#model"), b.dataset.model); closePopover(); if (b.dataset.model.endsWith("::__custom")) $("#customModel").focus(); }));
+    pop.querySelectorAll("[data-effort]").forEach((b) => (b.onclick = () => { pickSelect($("#effort"), b.dataset.effort); pop.querySelectorAll("[data-effort]").forEach((x) => x.classList.toggle("on", x === b)); }));
+    const fast = pop.querySelector("#popFast");
+    if (fast) fast.onchange = () => { if (fast.checked !== $("#btnFast").classList.contains("on")) $("#btnFast").click(); syncComposer(); };
+    pop.querySelector(".pop-item.on")?.scrollIntoView({ block: "nearest" });
+  });
+}
+function openPermPop() {
+  popover($("#permChip"), (pop) => {
+    pop.classList.add("perm-pop");
+    pop.innerHTML = `<div class="pop-h">When the agent wants to act</div>` + [...$("#mode").options].filter((o) => !o.hidden).map((o) =>
+      `<button class="pop-item tall${o.value === $("#mode").value ? " on" : ""}" data-mode="${o.value}" data-level="${o.value}">${ic(o.value === "bypassPermissions" ? "alert" : o.value === "plan" ? "lock" : "shield")}<span><b>${esc(PERM_SHORT[o.value] || o.textContent)}</b><small>${esc(PERM_INFO[o.value] || o.textContent)}</small></span>${o.value === $("#mode").value ? ic("check") : ""}</button>`).join("");
+    pop.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => { pickSelect($("#mode"), b.dataset.mode); closePopover(); }));
+  });
+}
+$("#engineChip").onclick = (e) => { e.preventDefault(); $("#popover")?.classList.contains("engine-pop") ? closePopover() : openEnginePop(); };
+$("#permChip").onclick = (e) => { e.preventDefault(); $("#popover")?.classList.contains("perm-pop") ? closePopover() : openPermPop(); };
+$$("#styleSeg button").forEach((b) => (b.onclick = () => pickSelect($("#style"), b.dataset.style)));
+$("#customModel").addEventListener("input", syncComposer);
+// project + branch under the composer
+function renderComposerCtx() {
+  const p = project(), g = typeof C !== "undefined" && S.cur ? C.git : null;
+  $("#composerCtx").hidden = !p;
+  if (!p) return;
+  $("#ctxProject span").textContent = p.name;
+  $("#ctxBranch").hidden = !g?.repo;
+  if (g?.repo) $("#ctxBranch span").textContent = (g.branch || "HEAD") + (g.files?.length ? ` · ${g.files.length} changed` : "");
+}
+$("#ctxProject").onclick = (e) => $("#btnProj").onclick(e);
+$("#ctxBranch").onclick = act(async () => {
+  const b = $("#ctxBranch").getBoundingClientRect();
+  if (typeof loadGit === "function") await loadGit();
+  const g = C.git;
+  if (!g?.repo) return;
+  showMenu(b.left, b.bottom + 6, [...g.branches.map((n) => ({ label: n, icon: n === g.branch ? "check" : "branch", fn: () => n !== g.branch && gitDo("checkout", { branch: n }) })), "sep",
+    { label: "New branch…", icon: "plus", fn: () => { const n = prompt("New branch name:"); if (n) gitDo("checkout", { branch: n, create: true }); } },
+    { label: "Open Source Control", icon: "commit", fn: () => { setMode("editor"); setView("git"); } }]);
+});
+$("#btnSideHistory").onclick = act(async () => { if (!S.cur) return toast("Pick a project first"); if (S.mode !== "agent" && $("#layout").classList.contains("no-agent")) $("#btnAgent").click(); await showHistory(); });
+
 function renderModels() {
   const sel = $("#model"), a = currentAgent(), prev = store.get(pkey("model:" + a?.id), "local::");
   sel.innerHTML = "";
@@ -649,6 +745,7 @@ function modelChanged() {
   const custom = $("#model").value.endsWith("::__custom");
   $("#customModel").hidden = !custom;
   if (custom) { $("#customModel").value = store.get(pkey("customModel"), ""); $("#customModel").focus(); }
+  syncComposer();
 }
 function modelChoice() {
   let [provider, model] = $("#model").value.split("::");
@@ -755,32 +852,88 @@ async function showHistory() {
 }
 
 // ============================================================ projects
+function touchRecent(cid, project, ev) {
+  S.recent ??= [];
+  let c = S.recent.find((r) => r.id === cid);
+  if (!c) {
+    if (ev.type !== "user") return;
+    c = { id: cid, project, title: (ev.text || ev.files?.[0]?.name || "Chat").replace(/\s+/g, " ").slice(0, 70), created: Date.now() / 1000 };
+    S.recent.unshift(c);
+  }
+  c.updated = Date.now() / 1000;
+  S.recent = [c, ...S.recent.filter((r) => r !== c)];
+}
+const shortAgo = (t) => {
+  const s = Math.max(0, Date.now() / 1000 - (t || 0));
+  return s < 60 ? "now" : s < 3600 ? Math.floor(s / 60) + "m" : s < 86400 ? Math.floor(s / 3600) + "h" : s < 604800 ? Math.floor(s / 86400) + "d" : Math.floor(s / 604800) + "w";
+};
+function convRow(c, opts = {}) {
+  const li = document.createElement("li");
+  const running = !!S.running[c.id], unread = !running && (S.done || []).some((d) => d.cid === c.id);
+  li.className = "conv" + (c.id === chatId() && c.project === S.cur ? " active" : "") + (running ? " run" : "");
+  li.title = c.title || "Chat";
+  li.innerHTML = `<span class="conv-title">${esc(c.title || "Chat")}</span>${opts.project ? `<span class="conv-proj">${esc((c.project || "").split("/").pop())}</span>` : ""}`
+    + (running ? '<span class="conv-state spin" title="Working"></span>' : unread ? '<span class="conv-state unread" title="Finished"></span>' : `<span class="conv-time">${shortAgo(c.updated || c.created)}</span>`);
+  li.onclick = act(async (e) => {
+    e.stopPropagation();
+    if (S.cur !== c.project) await selectProject(c.project);
+    if (S.mode !== "agent" && opts.toAgent) setMode("agent");
+    S.done = (S.done || []).filter((d) => d.cid !== c.id);
+    await openChat(c.id);
+  });
+  return li;
+}
 function renderProjects() {
-  renderTasks(); renderStatusBar();
-  const f = $("#projFilter").value.toLowerCase();
+  renderStatusBar(); renderComposerCtx();
+  const f = $("#projFilter").value.toLowerCase().trim();
   const ul = $("#projList");
   ul.innerHTML = "";
   const busyProjects = new Set(Object.values(S.running));
+  const open = store.get(pkey("openProjects"), {});
   for (const p of S.projects) {
-    if (f && !p.path.toLowerCase().includes(f)) continue;
+    const convs = (S.recent || []).filter((c) => c.project === p.path);
+    const hitConvs = f ? convs.filter((c) => (c.title || "").toLowerCase().includes(f)) : convs;
+    if (f && !p.path.toLowerCase().includes(f) && !hitConvs.length) continue;
     const li = document.createElement("li");
-    if (p.path === S.cur) li.className = "active";
-    const tags = [];
-    if (p.android) tags.push('<span class="tag">Android</span>');
-    if (p.flutter) tags.push('<span class="tag">Flutter</span>');
-    if (p.web?.length) tags.push('<span class="tag">Web</span>');
-    if (busyProjects.has(p.path)) tags.push('<span class="tag busy"><i class="dot"></i>working</span>');
-    if (S.previews[p.path]) tags.push('<span class="tag live"><i class="dot"></i>live</span>');
-    li.innerHTML = `<span class="pname">${esc(p.name)}</span><span class="ppath">${esc(p.path.replace(/^\/home\/[^/]+/, "~"))}</span><span class="tags">${tags.join("")}</span><button class="icon-btn rm" title="Remove from list">${ic("x")}</button>`;
-    li.onclick = act(() => selectProject(p.path));
+    li.className = "proj" + (p.path === S.cur ? " active" : "");
+    const expanded = f ? hitConvs.length > 0 : (open[p.path] ?? (p.path === S.cur || busyProjects.has(p.path)));
+    if (expanded) li.classList.add("open");
+    const kinds = [p.android && "Android", p.flutter && "Flutter", p.web?.length && "Web"].filter(Boolean).join(" · ");
+    const live = S.previews[p.path] ? '<span class="pdot live" title="Preview running"></span>' : "";
+    const busy = busyProjects.has(p.path) ? '<span class="pdot busy" title="Agent working"></span>' : "";
+    li.innerHTML = `<div class="prow" title="${esc(p.path)}"><button class="ptw" title="${expanded ? "Hide" : "Show"} conversations">${ic("chevron-right")}</button>${ic("folder")}`
+      + `<span class="pname">${esc(p.name)}</span>${busy}${live}<span class="pkind">${esc(kinds)}</span>`
+      + `<button class="icon-btn pnew" title="New task in ${esc(p.name)}">${ic("plus")}</button><button class="icon-btn rm" title="Remove from list">${ic("x")}</button></div>`;
+    li.querySelector(".prow").onclick = act(async () => {
+      if (p.path === S.cur) { open[p.path] = !expanded; store.set(pkey("openProjects"), open); return renderProjects(); }
+      open[p.path] = true; store.set(pkey("openProjects"), open);
+      await selectProject(p.path);
+    });
+    li.querySelector(".ptw").onclick = (e) => { e.stopPropagation(); open[p.path] = !expanded; store.set(pkey("openProjects"), open); renderProjects(); };
+    li.querySelector(".pnew").onclick = act(async (e) => { e.stopPropagation(); if (S.cur !== p.path) await selectProject(p.path); await openChat(null); $("#prompt").focus(); });
     li.querySelector(".rm").onclick = act(async (e) => {
       e.stopPropagation();
       await api("/api/projects/remove", { path: p.path });
       if (S.cur === p.path) S.cur = null;
       await loadState(); selectProject(S.cur);
     });
+    if (expanded) {
+      const sub = document.createElement("ul"); sub.className = "convs";
+      const list = f ? hitConvs : convs;
+      const limit = open[p.path + ":all"] ? 50 : 4;
+      list.slice(0, limit).forEach((c) => sub.append(convRow(c)));
+      if (!list.length) sub.innerHTML = '<li class="conv empty">No conversations yet</li>';
+      else if (list.length > limit) {
+        const more = document.createElement("li"); more.className = "conv more"; more.textContent = `Show ${list.length - limit} more`;
+        more.onclick = (e) => { e.stopPropagation(); open[p.path + ":all"] = true; store.set(pkey("openProjects"), open); renderProjects(); };
+        sub.append(more);
+      }
+      li.append(sub);
+    }
     ul.append(li);
   }
+  if (!ul.children.length) ul.innerHTML = `<li class="side-empty">${f ? "Nothing matches" : "Add a project folder to get started"}</li>`;
+  if ($("#chatPane").classList.contains("home")) renderHomeRecent();
 }
 function renderTools() {
   const t = S.tools;
@@ -815,7 +968,8 @@ async function loadState() {
   checkUpdated(st);  // first, so it shows even if an old server's answer breaks something below
   Object.assign(S, { profile: st.profile, projects: st.projects, tools: st.tools, previews: st.previews, procs: st.procs,
     providers: st.providers, settings: st.settings, agents: st.agents, plugins: st.plugins || [], prefs: st.prefs || {}, web: st.web,
-    flutter: st.flutter || {} });
+    flutter: st.flutter || {}, recent: st.recent || [] });
+  for (const c of S.recent) S.meta[c.id] ??= c;
   for (const [proj, r] of Object.entries(S.flutter)) if (r.device === "web-server") S.previews[proj] = { url: r.url, flutter: true };
   for (const [proj, cid] of Object.entries(st.current)) if (!(proj in S.curChat)) S.curChat[proj] = cid;
   for (const cid of st.running) S.running[cid] ??= "";
@@ -1033,7 +1187,7 @@ $("#btnTestNotify").onclick = () => {
   if (S.prefs.notify && Notification.permission === "granted") new Notification("Forge Studio", { body: "Notifications are working.", icon: "icon-192.png" });
   else toast("Sound played. Turn on desktop notifications above to get system notifications too.");
 };
-$("#setMode").onchange = () => { setPref({ mode: $("#setMode").value }); $("#mode").value = $("#setMode").value; };
+$("#setMode").onchange = () => { setPref({ mode: $("#setMode").value }); $("#mode").value = $("#setMode").value; syncComposer(); };
 $("#setHideTest").onchange = act(async () => { await api("/api/settings", { hideTest: $("#setHideTest").checked }); S.settings.hideTest = $("#setHideTest").checked; toast($("#setHideTest").checked ? "Test profiles will be hidden on the sign-in screen" : "Test profiles will be shown"); });
 
 function fillProfile() {
@@ -1834,7 +1988,7 @@ if (store.get("fs:nopanel", false)) $("#layout").classList.add("no-panel");
 if (store.get("fs:noagent", false)) $("#layout").classList.add("no-agent");
 $("#btnAgent").classList.toggle("on", !$("#layout").classList.contains("no-agent"));
 document.addEventListener("keydown", (e) => {
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "j" && S.mode !== "agent") { e.preventDefault(); toggleRight(); }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key || "").toLowerCase() === "j" && S.mode !== "agent") { e.preventDefault(); toggleRight(); }
 });
 
 // one divider: in Agent mode it sizes the Preview panel, in the IDE modes the docked agent chat (both sit right of it)
@@ -1876,24 +2030,8 @@ $("#btnProj").onclick = (e) => {
     { label: "New Flutter app…", icon: "zap", fn: openNewFlutter }]);
 };
 
-// ---- tasks: agent runs in progress across projects, and the ones that finished this session
-function renderTasks() {
-  const ul = $("#taskList");
-  if (!ul) return;
-  const running = Object.keys(S.running).filter((cid) => S.meta[cid]);
-  const done = (S.done || []).filter((d) => !S.running[d.cid] && S.meta[d.cid]).slice(0, 5);
-  ul.innerHTML = !running.length && !done.length ? '<li class="dim empty-task">Agent tasks you start show up here.</li>' : "";
-  const row = (cid, state) => {
-    const m = S.meta[cid], li = document.createElement("li");
-    li.className = "task " + state;
-    li.innerHTML = `<span class="task-ic"></span><span class="task-main"><span class="task-title">${esc(m.title)}</span>
-      <span class="task-sub">${state === "run" ? "Working" : "Ready"} · ${esc((m.project || "").split("/").pop())}</span></span>`;
-    li.onclick = act(async () => { if (S.cur !== m.project) await selectProject(m.project); await openChat(cid); });
-    ul.append(li);
-  };
-  running.forEach((cid) => row(cid, "run"));
-  done.forEach((d) => row(d.cid, "ok"));
-}
+// ---- tasks: running / just-finished conversations are shown in the project tree
+function renderTasks() { renderProjects(); }
 $("#btnSideNew").onclick = act(async () => { if (!S.cur) return $("#btnAdd").click(); await openChat(null); $("#prompt").focus(); });
 
 // ---- agent home (empty chat in Agent mode): greeting, centred composer and suggestions
@@ -1905,16 +2043,34 @@ function homeChips() {
   return ["Explain how this project is structured", "Find and fix bugs", "Write tests for the main module", "Review my uncommitted changes"];
 }
 function renderHome(box) {
-  const first = (S.profile?.name || "").split(" ")[0];
-  box.innerHTML = `<div class="home-hero"><img src="logo.png" alt=""><h1>Hello${first ? " " + esc(first) : ""}, welcome back!</h1>
-    <h2>What should we build in <b>${esc(project()?.name)}</b>?</h2></div>`;
+  const first = (S.profile?.name || "").split(" ")[0], h = new Date().getHours();
+  const hi = h < 5 ? "Working late" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  box.innerHTML = `<div class="home-hero"><span class="hero-mark"><img src="logo.png" alt=""></span><p class="hero-hi">${hi}${first ? ", " + esc(first) : ""}</p>
+    <h2>What should we forge in <b>${esc(project()?.name)}</b>?</h2></div>`;
   const chips = $("#homeChips");
-  chips.innerHTML = homeChips().map((t) => `<button class="chip">${ic("bot")}<span>${esc(t)}</span></button>`).join("");
+  chips.innerHTML = homeChips().map((t) => `<button class="chip">${ic("zap")}<span>${esc(t)}</span></button>`).join("");
   chips.querySelectorAll(".chip").forEach((c) => (c.onclick = () => { $("#prompt").value = c.textContent.trim(); $("#prompt").focus(); }));
+  renderHomeRecent();
+}
+function renderHomeRecent() {
+  const el = $("#homeRecent");
+  const convs = (S.recent || []).filter((c) => c.project === S.cur).slice(0, 6);
+  el.hidden = !$("#chatPane").classList.contains("home") || !convs.length;
+  if (el.hidden) return;
+  el.innerHTML = `<div class="hr-head"><span>Recent in ${esc(project()?.name || "")}</span><button class="link" id="hrAll">All conversations</button></div><ul class="hr-list"></ul>`;
+  const ul = el.querySelector("ul");
+  for (const c of convs) {
+    const li = convRow(c);
+    li.classList.add("hr-item");
+    li.querySelector(".conv-time")?.replaceWith(Object.assign(document.createElement("span"), { className: "conv-time", textContent: ago(c.updated || c.created) }));
+    ul.append(li);
+  }
+  $("#hrAll").onclick = act(showHistory);
 }
 
 // ---- status bar
 function renderStatusBar() {
+  renderComposerCtx();
   const bar = $("#statusbar");
   if (!bar) return;
   const g = typeof C !== "undefined" && S.cur ? C.git : null, p = project();
@@ -1973,7 +2129,7 @@ $("#setJbMcp").onchange = act(async () => { await api("/api/settings", { jbMcp: 
 $("#setJbMcpUrl").onchange = act(async () => { await api("/api/settings", { jbMcpUrl: $("#setJbMcpUrl").value }); S.settings.jbMcpUrl = $("#setJbMcpUrl").value.trim(); await checkJbMcp(); });
 $("#btnKeys").onclick = () => { $("#dlgSettings").close(); showShortcuts(); };
 document.addEventListener("keydown", (e) => {
-  const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+  const mod = e.ctrlKey || e.metaKey, k = (e.key || "").toLowerCase();
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
   if (document.querySelector("dialog[open]") && k !== "escape") return;
   if (e.key === "F1" || (e.key === "?" && !typing)) { e.preventDefault(); showShortcuts(); }
@@ -2007,7 +2163,7 @@ $("#style").value = "agent";
 $("#style").onchange = () => styleChanged();
 $("#effort").onchange = () => store.set(pkey("effort"), $("#effort").value);
 $("#btnFast").onclick = () => { $("#btnFast").classList.toggle("on"); store.set(pkey("fast"), $("#btnFast").classList.contains("on"));
-  toast($("#btnFast").classList.contains("on") ? "Fast mode on: quicker replies (supported Claude models)" : "Fast mode off"); };
+  syncComposer(); toast($("#btnFast").classList.contains("on") ? "Fast mode on: quicker replies (supported Claude models)" : "Fast mode off"); };
 $("#prompt").oninput = () => { const t = $("#prompt"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, innerHeight * 0.4) + "px"; };
 $("#prompt").onpaste = (e) => {
   const files = [...(e.clipboardData?.files || [])];
@@ -2027,7 +2183,7 @@ $("#btnHistory").onclick = act(() => ($("#historyPanel").hidden ? showHistory() 
 $("#agent").onchange = () => { if (chatId() && S.meta[chatId()]?.agent && S.meta[chatId()].agent !== $("#agent").value) { S.curChat[S.cur] = null; renderChat(); toast("Started a new chat for this agent"); } agentChanged(); };
 $("#model").onchange = modelChanged;
 $("#customModel").onchange = () => store.set(pkey("customModel"), $("#customModel").value.trim());
-$("#mode").onchange = () => { if ($("#mode").value === "bypassPermissions") toast("Full access: the agent will run commands and change files without asking."); };
+$("#mode").onchange = () => { syncComposer(); if ($("#mode").value === "bypassPermissions") toast("Full access: the agent will run commands and change files without asking."); };
 $("#projFilter").oninput = renderProjects;
 
 // preview

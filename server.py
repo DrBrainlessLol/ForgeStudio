@@ -3645,6 +3645,9 @@ class Handler(BaseHTTPRequestHandler):
                       "sdk": str(find_sdk() or ""), "git": shutil.which("git", path=env_path), "flutter": flutter_version()},
             "previews": {k: {"url": v["url"], "dir": v["dir"]} for k, v in PREVIEWS.items()},
             "running": [cid for cid, r in RUNS.items() if r.running() and cid in prof.data["chats"]],
+            # every saved conversation (newest first) for the sidebar: it survives restarts, unlike the old session-only task list
+            "recent": sorted(({k: c.get(k) for k in ("id", "title", "project", "agent", "created", "updated")} for c in prof.data["chats"].values()),
+                             key=lambda c: c.get("updated") or c.get("created") or 0, reverse=True)[:300],
             "agents": list_agents(),
             "plugins": list_plugins(),
             "prefs": prof.data["settings"],

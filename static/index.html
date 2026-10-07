@@ -87,12 +87,13 @@
 
 <div class="layout" id="layout">
   <aside class="sidebar">
-    <button class="btn side-new" id="btnSideNew"><svg class="ic"><use href="#i-chat-plus"/></svg> New agent task</button>
-    <div class="side-search"><svg class="ic"><use href="#i-search"/></svg><input id="projFilter" placeholder="Search"></div>
-    <div class="side-section"><span>Projects</span><button class="icon-btn" id="btnAdd" title="Add a project folder"><svg class="ic"><use href="#i-plus"/></svg></button></div>
+    <button class="side-new" id="btnSideNew"><svg class="ic"><use href="#i-plus"/></svg> New task<kbd>Alt N</kbd></button>
+    <nav class="side-nav">
+      <button id="btnSideHistory"><svg class="ic"><use href="#i-history"/></svg> Conversation history</button>
+      <div class="side-search"><svg class="ic"><use href="#i-search"/></svg><input id="projFilter" placeholder="Find a project or conversation"></div>
+    </nav>
+    <div class="side-section"><span>Projects</span><button class="icon-btn" id="btnAdd" title="Add a project folder"><svg class="ic"><use href="#i-folder-plus"/></svg></button></div>
     <ul id="projList" class="source-list"></ul>
-    <div class="side-section"><span>Tasks</span></div>
-    <ul id="taskList" class="task-list"></ul>
     <details class="side-status">
       <summary>System</summary>
       <div id="toolStatus"></div>
@@ -105,9 +106,9 @@
       <div class="code-wrap" id="codeWrap">
         <aside class="code-side" id="codeSide">
           <nav class="code-rail">
-            <button data-view="files" class="active" title="Explorer (Ctrl+Shift+E)"><svg class="ic"><use href="#i-files"/></svg></button>
-            <button data-view="search" title="Search in files (Ctrl+Shift+F)"><svg class="ic"><use href="#i-search"/></svg></button>
-            <button data-view="git" title="Source control (Ctrl+Shift+G)"><svg class="ic"><use href="#i-branch"/></svg><span class="rail-badge" id="gitBadge" hidden></span></button>
+            <button data-view="files" class="active" title="Files (Ctrl+Shift+E)"><svg class="ic"><use href="#i-files"/></svg><span>Files</span></button>
+            <button data-view="search" title="Search in files (Ctrl+Shift+F)"><svg class="ic"><use href="#i-search"/></svg><span>Search</span></button>
+            <button data-view="git" title="Source control (Ctrl+Shift+G)"><svg class="ic"><use href="#i-branch"/></svg><span>Git</span><span class="rail-badge" id="gitBadge" hidden></span></button>
             <div class="spacer"></div>
             <button id="btnCodeSide" title="Hide file panel"><svg class="ic"><use href="#i-sidebar"/></svg></button>
           </nav>
@@ -354,9 +355,20 @@
         <div class="composer-bar">
           <button type="button" class="icon-btn" id="btnAttach" title="Attach images or files"><svg class="ic"><use href="#i-paperclip"/></svg></button>
           <input type="file" id="fileInput" multiple hidden>
+          <button type="button" class="cchip" id="engineChip" title="Agent, model, reasoning and fast mode"><svg class="ic"><use href="#i-cpu"/></svg><span id="engineLabel">Claude Code</span><svg class="ic chev"><use href="#i-chevron"/></svg></button>
+          <input id="customModel" placeholder="model id" size="14" hidden>
+          <div class="spacer"></div>
+          <button type="button" class="cchip" id="permChip" title="What the agent may do without asking you"><svg class="ic"><use href="#i-shield"/></svg><span id="permLabel">Ask first</span><svg class="ic chev"><use href="#i-chevron"/></svg></button>
+          <div class="style-seg" id="styleSeg" title="Agent: build and change things · Plan: research and propose, no edits · Chat: just talk, no tools (Shift+Tab cycles)">
+            <button type="button" data-style="agent">Agent</button><button type="button" data-style="plan">Plan</button><button type="button" data-style="chat">Chat</button>
+          </div>
+          <button type="button" class="btn danger" id="btnStop" hidden><svg class="ic"><use href="#i-stop"/></svg> Stop</button>
+          <button type="submit" class="btn primary send" id="btnSend" title="Send (Enter)"><svg class="ic"><use href="#i-send"/></svg></button>
+        </div>
+        <!-- the real controls: the chips above edit these, and the rest of the app reads them -->
+        <div class="composer-legacy" hidden>
           <select id="agent" title="Agent CLI"></select>
           <select id="model" title="Model"></select>
-          <input id="customModel" placeholder="model id" size="14" hidden>
           <select id="style" title="Agent: build and change things · Plan: research and propose, no edits · Chat: just talk, no tools (Shift+Tab cycles)">
             <option value="agent">Agent</option><option value="plan">Plan</option><option value="chat">Chat</option>
           </select>
@@ -372,12 +384,14 @@
             <option value="bypassPermissions">Full access — never ask</option>
             <option value="plan">Plan only (read-only)</option>
           </select>
-          <div class="spacer"></div>
-          <button type="button" class="btn danger" id="btnStop" hidden><svg class="ic"><use href="#i-stop"/></svg> Stop</button>
-          <button type="submit" class="btn primary send" id="btnSend" title="Send (Enter)"><svg class="ic"><use href="#i-send"/></svg></button>
         </div>
       </form>
+      <div class="composer-ctx" id="composerCtx">
+        <button type="button" class="ctx-chip" id="ctxProject" title="Switch project"><svg class="ic"><use href="#i-folder"/></svg><span></span><svg class="ic chev"><use href="#i-chevron"/></svg></button>
+        <button type="button" class="ctx-chip" id="ctxBranch" title="Switch Git branch" hidden><svg class="ic"><use href="#i-branch"/></svg><span></span><svg class="ic chev"><use href="#i-chevron"/></svg></button>
+      </div>
       <div class="home-chips" id="homeChips" hidden></div>
+      <div class="home-recent" id="homeRecent" hidden></div>
     </section>
 
     <div class="resizer" id="resizer"></div>
