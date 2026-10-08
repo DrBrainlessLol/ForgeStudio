@@ -56,8 +56,8 @@
   --ok: #248a3d; --err: #d70015; --warn: #b25000; --info: #0071a4;
   --err-soft: rgba(215, 0, 21, 0.08); --warn-soft: rgba(178, 80, 0, 0.08);
 }
-[data-density="compact"] { --fs: 12px; --ctl-h: 25px; }
-[data-density="large"] { --fs: 14.5px; --ctl-h: 32px; }
+html[data-density="compact"] { --fs: 12px; --ctl-h: 25px; }
+html[data-density="large"] { --fs: 14.5px; --ctl-h: 32px; }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -1211,56 +1211,56 @@ dialog { border-radius: 18px; box-shadow: var(--pop-shadow); }
   -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.6s linear infinite; }
 
 /* ---- Compact (the default density): tighter bars, rows and padding throughout the Forge 2 layout ---- */
-[data-density="compact"] { --island-r: 12px; }
-[data-density="compact"] .titlebar { height: 40px; padding: 0 10px; }
-[data-density="compact"] .layout { height: calc(100% - 40px - 24px); padding-right: 8px; }
-[data-density="compact"] .layout.no-sidebar { padding-left: 8px; }
-[data-density="compact"] .sidebar { width: 232px; padding: 0 8px 4px 8px; }
-[data-density="compact"] .layout.no-sidebar .sidebar { margin-left: -232px; }
-[data-density="compact"] .statusbar { height: 24px; }
-[data-density="compact"] .modes button { height: 24px; padding: 0 12px; }
-[data-density="compact"] .tb-proj { height: 26px; }
-[data-density="compact"] .side-new { height: 32px; border-radius: 10px; margin-bottom: 4px; }
-[data-density="compact"] .side-nav > button, [data-density="compact"] .side-search { height: 28px; }
-[data-density="compact"] .side-section { padding: 10px 8px 2px; }
-[data-density="compact"] .proj .prow { height: 28px; }
-[data-density="compact"] .conv { height: 26px; }
-[data-density="compact"] .pane-head { height: 38px; padding: 0 10px; }
-[data-density="compact"] .history { top: 38px; }
-[data-density="compact"] .messages { padding: 14px 18px; gap: 10px; }
-[data-density="compact"] .tool summary { padding: 4px 9px; }
-[data-density="compact"] .composer { border-radius: 14px; margin-bottom: 10px; }
-[data-density="compact"] .composer textarea { padding: 10px 12px 4px; min-height: 44px; }
-[data-density="compact"] .composer-bar { padding: 2px 8px 8px; gap: 5px; }
-[data-density="compact"] .cchip { height: 26px; padding: 0 9px; }
-[data-density="compact"] .style-seg button { height: 20px; padding: 0 9px; }
-[data-density="compact"] .composer-ctx { margin-bottom: 6px; }
-[data-density="compact"] .ctx-chip { height: 22px; }
-[data-density="compact"] .chat.home .composer textarea { min-height: 72px; }
-[data-density="compact"] .home-hero h2 { font-size: 1.75em; margin-bottom: 14px; }
-[data-density="compact"] .hero-mark { width: 54px; height: 54px; border-radius: 16px; margin-bottom: 12px; }
-[data-density="compact"] .hero-mark img { width: 32px; height: 32px; }
-[data-density="compact"] .hr-item { height: 36px !important; }
-[data-density="compact"] .code-rail { padding: 6px 6px 2px; }
-[data-density="compact"] .code-rail button { height: 24px; padding: 0 8px; font-size: 12px; }
-[data-density="compact"] .cv-head { height: 30px; }
-[data-density="compact"] .tree-row { height: 22px; }
-[data-density="compact"] .ed-tabs-row { height: 36px; }
-[data-density="compact"] .ed-tab { height: 26px; }
-[data-density="compact"] .ed-crumbs, [data-density="compact"] .ed-status { height: 22px; }
-[data-density="compact"] .run-bar { height: 40px; }
-[data-density="compact"] .droid-tabs { height: 34px; }
-[data-density="compact"] .droid-tabs button { height: 24px; }
+html[data-density="compact"] { --island-r: 12px; }
+html[data-density="compact"] .titlebar { height: 40px; padding: 0 10px; }
+html[data-density="compact"] .layout { height: calc(100% - 40px - 24px); padding-right: 8px; }
+html[data-density="compact"] .layout.no-sidebar { padding-left: 8px; }
+html[data-density="compact"] .sidebar { width: 232px; padding: 0 8px 4px 8px; }
+html[data-density="compact"] .layout.no-sidebar .sidebar { margin-left: -232px; }
+html[data-density="compact"] .statusbar { height: 24px; }
+html[data-density="compact"] .modes button { height: 24px; padding: 0 12px; }
+html[data-density="compact"] .tb-proj { height: 26px; }
+html[data-density="compact"] .side-new { height: 32px; border-radius: 10px; margin-bottom: 4px; }
+html[data-density="compact"] .side-nav > button, html[data-density="compact"] .side-search { height: 28px; }
+html[data-density="compact"] .side-section { padding: 10px 8px 2px; }
+html[data-density="compact"] .proj .prow { height: 28px; }
+html[data-density="compact"] .conv { height: 26px; }
+html[data-density="compact"] .pane-head { height: 38px; padding: 0 10px; }
+html[data-density="compact"] .history { top: 38px; }
+html[data-density="compact"] .messages { padding: 14px 18px; gap: 10px; }
+html[data-density="compact"] .tool summary { padding: 4px 9px; }
+html[data-density="compact"] .composer { border-radius: 14px; margin-bottom: 10px; }
+html[data-density="compact"] .composer textarea { padding: 10px 12px 4px; min-height: 44px; }
+html[data-density="compact"] .composer-bar { padding: 2px 8px 8px; gap: 5px; }
+html[data-density="compact"] .cchip { height: 26px; padding: 0 9px; }
+html[data-density="compact"] .style-seg button { height: 20px; padding: 0 9px; }
+html[data-density="compact"] .composer-ctx { margin-bottom: 6px; }
+html[data-density="compact"] .ctx-chip { height: 22px; }
+html[data-density="compact"] .chat.home .composer textarea { min-height: 72px; }
+html[data-density="compact"] .home-hero h2 { font-size: 1.75em; margin-bottom: 14px; }
+html[data-density="compact"] .hero-mark { width: 54px; height: 54px; border-radius: 16px; margin-bottom: 12px; }
+html[data-density="compact"] .hero-mark img { width: 32px; height: 32px; }
+html[data-density="compact"] .hr-item { height: 36px !important; }
+html[data-density="compact"] .code-rail { padding: 6px 6px 2px; }
+html[data-density="compact"] .code-rail button { height: 24px; padding: 0 8px; font-size: 12px; }
+html[data-density="compact"] .cv-head { height: 30px; }
+html[data-density="compact"] .tree-row { height: 22px; }
+html[data-density="compact"] .ed-tabs-row { height: 36px; }
+html[data-density="compact"] .ed-tab { height: 26px; }
+html[data-density="compact"] .ed-crumbs, html[data-density="compact"] .ed-status { height: 22px; }
+html[data-density="compact"] .run-bar { height: 40px; }
+html[data-density="compact"] .droid-tabs { height: 34px; }
+html[data-density="compact"] .droid-tabs button { height: 24px; }
 
 /* Send / Stop: one plain button (no glowing circle) */
-.send, [data-density] .send { width: auto; height: 30px; margin-left: auto; padding: 0 8px 0 12px; border-radius: 9px; border: 0.5px solid transparent;
+.send, html[data-density] .send { width: auto; height: 30px; margin-left: auto; padding: 0 8px 0 12px; border-radius: 9px; border: 0.5px solid transparent;
   background: var(--text); color: var(--bg); box-shadow: none; display: inline-flex; align-items: center; gap: 7px; font-weight: 600; font-size: .95em; cursor: default; flex: none; }
 .send:hover { filter: none; opacity: .88; }
 .send:disabled { opacity: .35; }
 .send kbd { min-width: 0; padding: 0 5px; border: 0; background: color-mix(in srgb, var(--bg) 22%, transparent); color: inherit; font-size: 11px; line-height: 17px; opacity: .8; }
 .send.stop { background: var(--err-soft); color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, transparent); padding: 0 12px 0 10px; }
 .send.stop .ic { width: 12px; height: 12px; }
-[data-density="compact"] .send { height: 26px; }
+html[data-density="compact"] .send { height: 26px; }
 
 /* images the agent looked at, under its tool card; and the full-size image viewer */
 .tool-group { display: flex; flex-direction: column; gap: 6px; }
@@ -1322,7 +1322,7 @@ dialog { border-radius: 18px; box-shadow: var(--pop-shadow); }
 .show-side:hover { background: var(--control-hover); }
 .show-side .ic { width: 14px; height: 14px; color: var(--accent); }
 .show-side:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-[data-density="compact"] .show-side { height: 24px; padding: 0 8px; }
+html[data-density="compact"] .show-side { height: 24px; padding: 0 8px; }
 
 /* ---- quieter chrome: one flat "selected" look for every switch, no rings or glows ---- */
 .segmented, .style-seg, .modes { background: var(--hover); border: 0; box-shadow: none; backdrop-filter: none; }
