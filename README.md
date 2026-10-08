@@ -41,7 +41,7 @@ Most IDEs are built for **you** to write code, and add AI on top. Forge Studio i
 |---|---|---|---|
 | Built around | Agent conversations, plans and approvals | Your editor; AI as a side panel | Your editor; deep language tooling |
 | Runs on | Python's standard library + a browser tab you already have | Electron (its own Chromium + Node.js) | Java (JVM) with large indexes |
-| Download / installed | **~450 KB / ~1.1 MB** | hundreds of MB | ~1 GB+, several GB with the SDK |
+| Download / installed | **~560 KB / ~1.6 MB** | hundreds of MB | ~1 GB+, several GB with the SDK |
 | Memory (app itself) | **~40–70 MB** server + one browser tab | several processes, often 500 MB–1 GB+ | often 2–4 GB+; 8 GB RAM is the stated minimum for Android Studio |
 | Starts in | **~0.2 s** (server) | seconds | tens of seconds, plus indexing |
 | Which AI | Claude Code, Codex, Gemini CLI, Qwen, opencode, Aider, any CLI, or your own API key | mostly the vendor's own models/plans | vendor plugins |
@@ -49,7 +49,7 @@ Most IDEs are built for **you** to write code, and add AI on top. Forge Studio i
 | Use from your phone or another PC | built in (LAN web app with a token) | remote extensions / tunnels | no |
 | Open source | AGPL-3.0, no account or telemetry | varies | partly |
 
-*Sizes and memory for other tools vary by version, extensions and project size. Forge Studio's numbers are measured on Linux with the 1.2.0 package.*
+*Sizes and memory for other tools vary by version, extensions and project size. Forge Studio's numbers are measured on Linux with the 1.3.0 package; the built-in terminal (xterm.js) only loads when you open a terminal agent.*
 
 ### Why it suits older and lower-end PCs
 - **Almost nothing to install.** There's no bundled browser, Node.js or JVM. It's one Python file plus static HTML/CSS/JS with no framework and no build step, so it fits on any disk and installs in seconds.
@@ -113,7 +113,7 @@ The status bar shows the Git branch, the project, the agent's state and (in Andr
 | **Built-in (API key, no CLI)** | No CLI needed — talks to an Anthropic-style API directly with your own key. Read/Write/Edit/Bash tools, approvals, images, resume. |
 | **Codex** | Native adapter: shell/file-change cards, image input, resume |
 | Gemini CLI, Qwen Code, opencode, Cursor Agent, Aider | Detected automatically when installed; output streams into the chat |
-| **Freebuff** (free, ad-supported) | Install from Settings → Setup. It only has its own terminal interface, so the engine picker opens it in a terminal for the current project |
+| **Freebuff** (free, ad-supported) | Install from Settings → Setup. It has no headless mode, so its own interface runs inside the chat panel in a built-in terminal (one session per project; **System terminal** opens it outside Forge) |
 | Custom | Settings → Agents → any command, with `{prompt}` and `{model}` placeholders |
 
 The **Built-in** engine is what makes Forge Studio work standalone: pick it as the agent and select one of your own API-key providers in the model menu. It runs the whole agent loop in-process (Read/Write/Edit/Bash tools + approvals), so no coding CLI has to be installed. It speaks **both** API shapes:
@@ -136,10 +136,10 @@ A built-in editor and Git client, no external tools bundled:
 
 ## Install / packaging
 The [one-line installer](#install) is the easiest way. Packages are also attached to every [GitHub release](https://github.com/DrBrainlessLol/ForgeStudio/releases) (built with `packaging/build.sh` into `packaging/dist/`):
-- **Debian / Ubuntu / Deepin:** `sudo apt install ./forge-studio_1.2.0_all.deb`
-- **Arch:** `sudo pacman -U forge-studio-1.2.0-1-any.pkg.tar.zst` (or `makepkg -si` with the `PKGBUILD`)
+- **Debian / Ubuntu / Deepin:** `sudo apt install ./forge-studio_1.3.0_all.deb`
+- **Arch:** `sudo pacman -U forge-studio-1.3.0-1-any.pkg.tar.zst` (or `makepkg -si` with the `PKGBUILD`)
 - **Fedora / openSUSE:** build the RPM with `forge-studio.spec`
-- **Any distro:** extract `forge-studio-1.2.0.tar.gz` and run `sudo ./install.sh` (or `./install.sh --user`)
+- **Any distro:** extract `forge-studio-1.3.0.tar.gz` and run `sudo ./install.sh` (or `./install.sh --user`)
 
 See `packaging/README.md` for details.
 

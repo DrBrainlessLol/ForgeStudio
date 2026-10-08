@@ -511,6 +511,8 @@ KNOWN_AGENTS = [
     {"id": "opencode", "name": "opencode", "bin": "opencode", "kind": "generic", "template": "opencode run {prompt}"},
     {"id": "cursor-agent", "name": "Cursor Agent", "bin": "cursor-agent", "kind": "generic", "template": "cursor-agent -p --force {prompt}"},
     {"id": "aider", "name": "Aider", "bin": "aider", "kind": "generic", "template": "aider --yes-always --no-pretty --message {prompt}"},
+    # agents that only have their own full-screen terminal app: shown inside the chat panel in a built-in terminal
+    {"id": "freebuff", "name": "Freebuff", "bin": "freebuff", "kind": "terminal", "argv": ["freebuff", "--cwd", "{project}"]},
 ]
 
 
@@ -1532,7 +1534,7 @@ DELIVERABLE_EXT = {".zip", ".tar", ".gz", ".tgz", ".7z", ".pdf", ".docx", ".doc"
                    ".ogg", ".mp4", ".webm", ".apk", ".aab", ".ipa", ".dmg", ".deb", ".exe", ".msi"}
 
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 USAGE_FILE = CONFIG_DIR / "usage.json"
 USAGE = read_json(USAGE_FILE, {})
 
@@ -1563,6 +1565,8 @@ def server_stale():
 def restart_server():
     """Replace this process with a fresh copy of the (updated) server. Agent tasks and builds stop first."""
     time.sleep(0.4)  # let the HTTP reply go out
+    for k in list(PTYS):
+        pty_kill(k)
     for rec in list(PROCS.values()):
         if rec["kind"] not in ("emulator", "scrcpy"):
             kill_proc(rec["id"])
@@ -3027,8 +3031,8 @@ def setup_status():
          "note": "Optional. No CLI at all? Pick the Built-in agent and add an API key in Models & Keys."},
         {"id": "freebuff", "group": "Agents", "name": "Freebuff", "ok": bool(which("freebuff")), "detail": which("freebuff"),
          "install": True, "optional": True, "link": "https://freebuff.com",
-         "note": "Optional, free (ad-supported) coding agent. It only has its own terminal interface, so Forge opens it in a "
-                 "terminal for your project (engine picker → Freebuff) instead of in the chat."},
+         "note": "Optional, free (ad-supported) coding agent. Pick it in the engine picker: its own interface runs inside the "
+                 "chat panel in a built-in terminal. Run it once and sign in when it asks."},
         {"id": "git", "group": "Code", "name": "Git", "ok": bool(which("git")), "detail": which("git"), "install": False,
          "link": "https://git-scm.com/downloads", "cmd": git_cmd, "note": "For Source Control, cloning and the Git status bar."},
         {"id": "node", "group": "Code", "name": "Node.js (LTS)", "ok": bool(which("node")), "detail": which("node"),
@@ -3106,6 +3110,95 @@ def save_upload(prof, name, data):
     kind = "image" if f.suffix.lower() in IMAGE_TYPES else "file"
     return {"name": name, "path": str(f), "size": len(data), "kind": kind,
             "mime": mimetypes.guess_type(name)[0] or "application/octet-stream"}
+
+
+# ---------------------------------------------------------------- built-in terminal (for terminal-only agents)
+PTYS = {}
+PTY_SCROLLBACK = 2_000_000
+
+
+def pty_start(project, agent_id, cols, rows):
+    """Run a terminal agent (e.g. Freebuff) in a pseudo-terminal; output streams to the UI as `pty` events. One session
+    per project and agent: opening it again reattaches."""
+    import pty
+    key = f"{agent_id}:{project}"
+    cur = PTYS.get(key)
+    if cur and cur["alive"]:
+        pty_resize(key, cols, rows)
+        return {"id": key, "reattached": True}
+    a = agent_by_id(agent_id)
+    if not a or a.get("kind") != "terminal":
+        raise ValueError("Not a terminal agent")
+    env = tool_env()
+    exe = shutil.which(a["bin"], path=env["PATH"])
+    if not exe:
+        raise ValueError(f"{a['name']} isn't installed. Install it in Settings → Setup.")
+    argv = [exe] + [x.replace("{project}", project) for x in a["argv"][1:]]
+    env.update(TERM="xterm-256color", COLORTERM="truecolor", FORCE_COLOR="1")
+    pid, fd = pty.fork()
+    if pid == 0:  # child
+        try:
+            os.chdir(project)
+            os.execvpe(argv[0], argv, env)
+        finally:
+            os._exit(127)
+    rec = {"id": key, "pid": pid, "fd": fd, "project": project, "agent": agent_id, "alive": True, "buf": bytearray(), "started": time.time()}
+    PTYS[key] = rec
+    pty_resize(key, cols, rows)
+
+    def reader():
+        while True:
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                data = b""
+            if not data:
+                break
+            rec["buf"] += data
+            if len(rec["buf"]) > PTY_SCROLLBACK:
+                del rec["buf"][:len(rec["buf"]) - PTY_SCROLLBACK]
+            emit({"type": "pty", "id": key, "data": base64.b64encode(data).decode()})
+        rec["alive"] = False
+        try:
+            _, status = os.waitpid(pid, 0)
+            rec["code"] = os.waitstatus_to_exitcode(status)
+        except ChildProcessError:
+            rec["code"] = None
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        emit({"type": "pty_exit", "id": key, "code": rec.get("code")})
+    threading.Thread(target=reader, daemon=True).start()
+    return {"id": key, "reattached": False}
+
+
+def pty_resize(key, cols, rows):
+    import fcntl
+    import struct
+    import termios
+    rec = PTYS.get(key)
+    if rec and rec["alive"]:
+        try:
+            fcntl.ioctl(rec["fd"], termios.TIOCSWINSZ, struct.pack("HHHH", max(2, int(rows)), max(10, int(cols)), 0, 0))
+        except OSError:
+            pass
+
+
+def pty_input(key, data):
+    rec = PTYS.get(key)
+    if not rec or not rec["alive"]:
+        raise ValueError("The session has ended")
+    os.write(rec["fd"], data.encode())
+
+
+def pty_kill(key):
+    rec = PTYS.get(key)
+    if rec and rec["alive"]:
+        try:
+            os.kill(rec["pid"], signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
 
 def open_in_terminal(argv, cwd):
@@ -3942,6 +4035,22 @@ class Handler(BaseHTTPRequestHandler):
             _jb_cache["t"] = 0
             save_config()
             return None
+        if path == "/api/pty/start":
+            if not project:
+                raise ValueError("Open a project first")
+            return pty_start(project, b.get("agent"), b.get("cols") or 100, b.get("rows") or 30)
+        if path == "/api/pty/input":
+            pty_input(b.get("id"), b.get("data") or "")
+            return None
+        if path == "/api/pty/resize":
+            pty_resize(b.get("id"), b.get("cols") or 100, b.get("rows") or 30)
+            return None
+        if path == "/api/pty/kill":
+            pty_kill(b.get("id"))
+            return None
+        if path == "/api/pty/buffer":
+            rec = PTYS.get(b.get("id"))
+            return {"data": base64.b64encode(bytes(rec["buf"])).decode() if rec else "", "alive": bool(rec and rec["alive"])}
         if path == "/api/agent/terminal":  # agents that only have their own terminal UI (Freebuff)
             exe = shutil.which("freebuff", path=tool_env()["PATH"])
             if not project:
@@ -4258,6 +4367,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def shutdown(*_):
+    for k in list(PTYS):
+        pty_kill(k)
     for rec in list(PROCS.values()):
         if rec["kind"] not in ("emulator", "scrcpy"):
             kill_proc(rec["id"])

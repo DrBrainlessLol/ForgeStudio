@@ -980,6 +980,7 @@ function initCode() {
 
   // global keys when the Code tab is open
   document.addEventListener("keydown", (e) => {
+    if (e.target.closest?.(".xterm")) return;
     if ($("#tab-code").hidden) return;
     const mod = e.ctrlKey || e.metaKey, inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
     if (mod && e.key.toLowerCase() === "p" && !e.shiftKey) { e.preventDefault(); openQuick(); }

@@ -1289,3 +1289,15 @@ dialog { border-radius: 18px; box-shadow: var(--pop-shadow); }
 .pop-sep { height: 0.5px; background: var(--line); margin: 6px 8px; }
 .pop-item.dimmed { color: var(--dim); }
 .pop-item small { font-size: .88em; }
+
+/* terminal agents (Freebuff): their own interface inside the chat panel */
+.chat.term-mode > .messages, .chat.term-mode > .composer, .chat.term-mode > .composer-ctx, .chat.term-mode > .next-actions,
+.chat.term-mode > .home-chips, .chat.term-mode > .home-recent { display: none !important; }
+.term-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.term-view[hidden] { display: none; }
+.term-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 14px; border-bottom: 0.5px solid var(--line); flex: none; }
+.term-title { font-weight: 600; }
+.term-note { color: var(--dim); font-size: .9em; }
+.term-host { flex: 1; min-height: 0; padding: 8px 4px 6px 10px; }
+.term-host .xterm { height: 100%; }
+.term-host .xterm-viewport { background: transparent !important; }

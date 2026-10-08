@@ -669,6 +669,8 @@ function agentChanged(save = true) {
   styleChanged(false);
   renderModels();
   syncComposer(); renderUsage();
+  if (kind !== "terminal") S.lastChatAgent = a?.id;
+  act(updateTermView)();
 }
 function styleChanged(save = true) {
   const st = $("#style").value;
@@ -722,23 +724,16 @@ const pickSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new Ev
 function openEnginePop() {
   popover($("#engineChip"), (pop) => {
     pop.classList.add("engine-pop");
-    const agents = [...$("#agent").options].map((o) => `<button class="pop-item${o.value === $("#agent").value ? " on" : ""}" data-agent="${esc(o.value)}">${ic("bot")}<span>${esc(o.textContent)}</span>${o.value === $("#agent").value ? ic("check") : ""}</button>`).join("");
+    const agents = [...$("#agent").options].map((o) => `<button class="pop-item${o.value === $("#agent").value ? " on" : ""}" data-agent="${esc(o.value)}">${ic(S.agents.find((a) => a.id === o.value)?.kind === "terminal" ? "terminal" : "bot")}<span>${esc(o.textContent)}</span>${o.value === $("#agent").value ? ic("check") : ""}</button>`).join("");
     const models = [...$("#model").children].map((g) => g.tagName === "OPTGROUP"
       ? `<div class="pop-sub">${esc(g.label)}</div>` + [...g.children].map((o) => `<button class="pop-item${o.value === $("#model").value ? " on" : ""}" data-model="${esc(o.value)}"><span>${esc(o.textContent)}</span>${o.value === $("#model").value ? ic("check") : ""}</button>`).join("")
       : `<button class="pop-item${g.value === $("#model").value ? " on" : ""}" data-model="${esc(g.value)}"><span>${esc(g.textContent)}</span>${g.value === $("#model").value ? ic("check") : ""}</button>`).join("");
     const claude = !$("#effort").hidden;
-    const fb = S.tools?.freebuff
-      ? `<button class="pop-item" data-terminal="freebuff" title="Freebuff only has its own terminal interface, so it opens in a terminal for this project">${ic("terminal")}<span>Freebuff <small class="dim">· opens a terminal</small></span>${ic("external")}</button>`
-      : `<button class="pop-item dimmed" data-setup="freebuff" title="A free, ad-supported coding agent">${ic("terminal")}<span>Freebuff <small class="dim">· install</small></span></button>`;
-    pop.innerHTML = `<div class="pop-cols"><div class="pop-col"><div class="pop-h">Agent</div>${agents}<div class="pop-sep"></div>${fb}</div><div class="pop-col models"><div class="pop-h">Model</div>${models}</div></div>`
+    const fb = S.tools?.freebuff ? ""
+      : `<div class="pop-sep"></div><button class="pop-item dimmed" data-setup="freebuff" title="A free, ad-supported coding agent">${ic("terminal")}<span>Freebuff <small class="dim">· install</small></span></button>`;
+    pop.innerHTML = `<div class="pop-cols"><div class="pop-col"><div class="pop-h">Agent</div>${agents}${fb}</div><div class="pop-col models"><div class="pop-h">Model</div>${models}</div></div>`
       + (claude ? `<div class="pop-foot"><div class="pop-h">Reasoning</div><div class="pop-seg">${[["", "Auto"], ...Object.entries(EFFORT_SHORT)].map(([v, t]) => `<button data-effort="${v}" class="${$("#effort").value === v ? "on" : ""}">${t}</button>`).join("")}</div>
         <label class="pop-toggle">${ic("zap")}<span><b>Fast mode</b><small>Quicker answers from the same model (supported models)</small></span><span class="switch"><input type="checkbox" id="popFast" ${$("#btnFast").classList.contains("on") ? "checked" : ""}><i></i></span></label></div>` : "");
-    pop.querySelector("[data-terminal]")?.addEventListener("click", act(async () => {
-      closePopover();
-      if (!S.cur) throw new Error("Pick a project first");
-      const r = await api("/api/agent/terminal", { project: S.cur, agent: "freebuff" });
-      toast(`Freebuff opened in ${r.terminal} for ${project()?.name}`);
-    }));
     pop.querySelector("[data-setup]")?.addEventListener("click", () => { closePopover(); openSettings("setup"); });
     pop.querySelectorAll("[data-agent]").forEach((b) => (b.onclick = () => { pickSelect($("#agent"), b.dataset.agent); openEnginePop(); }));
     pop.querySelectorAll("[data-model]").forEach((b) => (b.onclick = () => { pickSelect($("#model"), b.dataset.model); closePopover(); if (b.dataset.model.endsWith("::__custom")) $("#customModel").focus(); }));
@@ -783,6 +778,51 @@ $("#ctxBranch").onclick = act(async () => {
 });
 $("#btnSideHistory").onclick = act(async () => { if (!S.cur) return toast("Pick a project first"); if (S.mode !== "agent" && $("#layout").classList.contains("no-agent")) $("#btnAgent").click(); await showHistory(); });
 
+// ============================================================ terminal agents (Freebuff): their own TUI inside the chat panel
+const T = { term: null, fit: null, id: null, loading: null };
+function loadXterm() {
+  if (window.Terminal) return Promise.resolve();
+  return (T.loading ??= new Promise((ok, fail) => {
+    const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "vendor/xterm/xterm.css"; document.head.append(css);
+    const add = (src) => new Promise((r, f) => { const sc = document.createElement("script"); sc.src = src; sc.onload = r; sc.onerror = () => f(new Error("Couldn't load the terminal")); document.head.append(sc); });
+    add("vendor/xterm/xterm.js").then(() => add("vendor/xterm/addon-fit.js")).then(ok, fail);
+  }));
+}
+const b64bytes = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+function termTheme() {
+  const cs = getComputedStyle(document.body), v = (n) => cs.getPropertyValue(n).trim();
+  return { background: v("--bg"), foreground: v("--text"), cursor: v("--accent"), selectionBackground: v("--accent-ring") };
+}
+async function updateTermView() {
+  const a = currentAgent(), on = a?.kind === "terminal" && !!S.cur;
+  $("#chatPane").classList.toggle("term-mode", on);
+  $("#termView").hidden = !on;
+  if (!on) return;
+  $("#termTitle").textContent = a.name;
+  $("#termNote").textContent = a.id === "freebuff" ? "free, ad-supported · type right in the terminal" : "type right in the terminal";
+  $("#btnTermBack").textContent = "Back to " + (S.agents.find((x) => x.id === (S.lastChatAgent || "claude"))?.name || "chat");
+  await loadXterm();
+  if (!T.term) {
+    T.term = new Terminal({ fontFamily: getComputedStyle(document.body).getPropertyValue("--mono"), fontSize: 13, cursorBlink: true, allowProposedApi: true, theme: termTheme(), scrollback: 5000 });
+    T.fit = new FitAddon.FitAddon(); T.term.loadAddon(T.fit);
+    T.term.open($("#termHost"));
+    T.term.onData((d) => T.id && api("/api/pty/input", { id: T.id, data: d }).catch(() => {}));
+    let rt;
+    new ResizeObserver(() => { clearTimeout(rt); rt = setTimeout(() => { if ($("#termView").hidden) return; T.fit.fit(); T.id && api("/api/pty/resize", { id: T.id, cols: T.term.cols, rows: T.term.rows }).catch(() => {}); }, 80); }).observe($("#termHost"));
+  }
+  T.term.options.theme = termTheme();
+  T.fit.fit();
+  const key = `${a.id}:${S.cur}`;
+  if (T.id === key && T.alive) { T.term.focus(); return; }
+  T.term.reset();
+  const r = await api("/api/pty/start", { project: S.cur, agent: a.id, cols: T.term.cols, rows: T.term.rows });
+  T.id = r.id; T.alive = true;
+  if (r.reattached) { const b = await api("/api/pty/buffer", { id: T.id }); if (b.data) T.term.write(b64bytes(b.data)); }
+  T.term.focus();
+}
+$("#btnTermBack").onclick = () => pickSelect($("#agent"), S.lastChatAgent && S.agents.some((x) => x.id === S.lastChatAgent && x.installed) ? S.lastChatAgent : "claude");
+$("#btnTermRestart").onclick = act(async () => { if (T.id) await api("/api/pty/kill", { id: T.id }); T.alive = false; T.id = null; setTimeout(act(updateTermView), 400); });
+$("#btnTermExt").onclick = act(async () => { const r = await api("/api/agent/terminal", { project: S.cur, agent: currentAgent().id }); toast(`Opened in ${r.terminal}`); });
 function renderModels() {
   const sel = $("#model"), a = currentAgent(), prev = store.get(pkey("model:" + a?.id), "local::");
   sel.innerHTML = "";
@@ -1030,6 +1070,7 @@ async function selectProject(path) {
   if (p && !p.android && !p.flutter && S.mode === "android") setMode(store.get("fs:lastMode", "editor"));
   if (S.mode === "android") { loadToolchain(); act(refreshDevices)(); }  // Flutter and Android projects list different devices
   renderStatusBar();
+  if (currentAgent()?.kind === "terminal") act(updateTermView)();
   await openChat(chatId()).catch((e) => { S.curChat[S.cur] = null; renderChat(); toast(e.message, true); });
 }
 async function loadState() {
@@ -1956,6 +1997,11 @@ function connect() {
         if (BUILD_KINDS.has(ev.kind) && ev.project !== S.cur) toast(`${ev.label} ${ev.code === 0 ? "finished" : "failed"} in ${ev.project.split("/").pop()}`, ev.code !== 0);
         renderProcs(); break;
       }
+      case "pty":
+        if (ev.id === T.id && T.term) T.term.write(b64bytes(ev.data)); break;
+      case "pty_exit":
+        if (ev.id === T.id && T.term) { T.alive = false; T.term.write(`\r\n\x1b[2m[${currentAgent()?.name || "Session"} ended${ev.code ? " with code " + ev.code : ""}. Click Restart to start it again.]\x1b[0m\r\n`); }
+        break;
       case "usage":
         S.usage = { ...(S.usage || {}), [ev.agent]: ev.usage }; renderUsage(); break;
       case "preview_url":
@@ -2043,6 +2089,7 @@ function setMode(mode, save = true) {
 const showCode = (on = true) => setMode(on ? "editor" : "agent");
 $$("#modes button").forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
 document.addEventListener("keydown", (e) => {
+  if (e.target.closest?.(".xterm")) return;  // the terminal gets every key
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && ["1", "2", "3"].includes(e.key)) {
     e.preventDefault();
     if (!$(`#modes [data-mode="${MODES[+e.key - 1]}"]`).hidden) setMode(MODES[+e.key - 1]);
@@ -2072,6 +2119,7 @@ if (store.get("fs:nopanel", false)) $("#layout").classList.add("no-panel");
 if (store.get("fs:noagent", false)) $("#layout").classList.add("no-agent");
 $("#btnAgent").classList.toggle("on", !$("#layout").classList.contains("no-agent"));
 document.addEventListener("keydown", (e) => {
+  if (e.target.closest?.(".xterm")) return;  // the terminal gets every key
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key || "").toLowerCase() === "j" && S.mode !== "agent") { e.preventDefault(); toggleRight(); }
 });
 
@@ -2213,6 +2261,7 @@ $("#setJbMcp").onchange = act(async () => { await api("/api/settings", { jbMcp: 
 $("#setJbMcpUrl").onchange = act(async () => { await api("/api/settings", { jbMcpUrl: $("#setJbMcpUrl").value }); S.settings.jbMcpUrl = $("#setJbMcpUrl").value.trim(); await checkJbMcp(); });
 $("#btnKeys").onclick = () => { $("#dlgSettings").close(); showShortcuts(); };
 document.addEventListener("keydown", (e) => {
+  if (e.target.closest?.(".xterm")) return;  // the terminal gets every key
   const mod = e.ctrlKey || e.metaKey, k = (e.key || "").toLowerCase();
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
   if (document.querySelector("dialog[open]") && k !== "escape") return;
