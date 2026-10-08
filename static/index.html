@@ -16,6 +16,7 @@
     const t = JSON.parse(localStorage.getItem("fs:theme") || "null") || { theme: "dark", accent: "#0A84FF" };
     document.documentElement.dataset.theme = t.theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : t.theme;
     document.documentElement.style.setProperty("--accent", t.accent);
+    document.documentElement.dataset.density = t.density || "compact";
   } catch {}
 </script>
 </head>
@@ -362,8 +363,8 @@
           <div class="style-seg" id="styleSeg" title="Agent: build and change things · Plan: research and propose, no edits · Chat: just talk, no tools (Shift+Tab cycles)">
             <button type="button" data-style="agent">Agent</button><button type="button" data-style="plan">Plan</button><button type="button" data-style="chat">Chat</button>
           </div>
-          <button type="button" class="btn danger" id="btnStop" hidden><svg class="ic"><use href="#i-stop"/></svg> Stop</button>
-          <button type="submit" class="btn primary send" id="btnSend" title="Send (Enter)"><svg class="ic"><use href="#i-send"/></svg></button>
+          <button type="button" id="btnStop" hidden></button>
+          <button type="submit" class="send" id="btnSend" title="Send (Enter)"><span>Send</span><kbd>↵</kbd></button>
         </div>
         <!-- the real controls: the chips above edit these, and the rest of the app reads them -->
         <div class="composer-legacy" hidden>
@@ -389,6 +390,7 @@
       <div class="composer-ctx" id="composerCtx">
         <button type="button" class="ctx-chip" id="ctxProject" title="Switch project"><svg class="ic"><use href="#i-folder"/></svg><span></span><svg class="ic chev"><use href="#i-chevron"/></svg></button>
         <button type="button" class="ctx-chip" id="ctxBranch" title="Switch Git branch" hidden><svg class="ic"><use href="#i-branch"/></svg><span></span><svg class="ic chev"><use href="#i-chevron"/></svg></button>
+        <button type="button" class="usage-meter" id="usageMeter" hidden></button>
       </div>
       <div class="home-chips" id="homeChips" hidden></div>
       <div class="home-recent" id="homeRecent" hidden></div>
@@ -560,7 +562,8 @@
 
       <section data-sec="general">
         <h2>General</h2>
-        <div class="form-group"><div class="form-row"><span>Keyboard shortcuts <span class="dim">(F1)</span></span><button class="btn" id="btnKeys"><svg class="ic"><use href="#i-keyboard"/></svg> Show</button></div></div>
+        <div class="form-group"><div class="form-row"><span>Keyboard shortcuts <span class="dim">(F1)</span></span><button class="btn" id="btnKeys"><svg class="ic"><use href="#i-keyboard"/></svg> Show</button></div>
+          <div class="form-row"><span>Show usage<br><small class="dim">tokens and cost after each reply, and your plan's limits (Claude Code's 5-hour and weekly windows) under the message box</small></span><label class="switch"><input type="checkbox" id="setUsage"><i></i></label></div></div>
         <div class="form-group">
           <div class="form-row"><span>Appearance</span>
             <div class="segmented" id="themeSeg">
@@ -647,6 +650,9 @@
         <h2>Plugins</h2>
         <p class="dim">Plugins bundle slash commands, agents, skills and MCP servers. Claude Code loads them natively; the Built-in engine supports commands and skills/agents (not MCP). Installed to <code>~/.config/forge-studio/plugins</code>.</p>
         <ul class="list" id="pluginList"></ul>
+        <h4>From Claude Code</h4>
+        <p class="dim small-text">Plugins Claude Code itself has: installed from a marketplace (<code>/plugin</code> in Claude Code) or synced from your claude.ai account. They're already active in Claude Code chats here; manage them in Claude Code.</p>
+        <ul class="list" id="ccPluginList"></ul>
         <h4>Install a plugin</h4>
         <div class="row"><input id="plSource" class="grow mono" placeholder="/path/to/plugin-name or https://github.com/user/plugin.git"><button type="button" class="btn primary" id="plInstall">Install</button></div>
         <h4>Create a plugin</h4>

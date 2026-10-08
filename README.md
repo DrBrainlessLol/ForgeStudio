@@ -113,6 +113,7 @@ The status bar shows the Git branch, the project, the agent's state and (in Andr
 | **Built-in (API key, no CLI)** | No CLI needed — talks to an Anthropic-style API directly with your own key. Read/Write/Edit/Bash tools, approvals, images, resume. |
 | **Codex** | Native adapter: shell/file-change cards, image input, resume |
 | Gemini CLI, Qwen Code, opencode, Cursor Agent, Aider | Detected automatically when installed; output streams into the chat |
+| **Freebuff** (free, ad-supported) | Install from Settings → Setup. It only has its own terminal interface, so the engine picker opens it in a terminal for the current project |
 | Custom | Settings → Agents → any command, with `{prompt}` and `{model}` placeholders |
 
 The **Built-in** engine is what makes Forge Studio work standalone: pick it as the agent and select one of your own API-key providers in the model menu. It runs the whole agent loop in-process (Read/Write/Edit/Bash tools + approvals), so no coding CLI has to be installed. It speaks **both** API shapes:
@@ -167,6 +168,9 @@ See `packaging/README.md` for details.
 - Phased work gets **Move to Phase N** / **Move to next phase** buttons when a reply finishes a phase.
 - Files the agent makes for you (zip, PDF, Word, Markdown, images…) appear as **File ready** cards; folders in the explorer can be downloaded as a ZIP.
 - Keyboard shortcuts: press **F1** or **?** for the list.
+- **Usage:** each reply ends with its tokens and cost, and Claude Code's plan limits (5-hour and weekly) show as small meters under the message box. Turn it off in Settings → General.
+- **See what the agent sees:** screenshots it takes and images it reads appear under the step as thumbnails; click any image (yours or the agent's) to view it full size.
+- **Send / Stop** is one button. The UI is **Compact** by default (Settings → General → Density).
 
 ## JetBrains IDEs
 - **Plugin** (`jetbrains-plugin/`, IntelliJ-based IDEs 2024.3+): a **Forge Studio** tool window with the full app focused on the open project, and **Ask / Explain / Find and Fix Problems / Write Tests / Open Project** in the editor and project-view right-click menus (and Tools → Forge Studio). The code and its file/line reference land in Forge's message box. Build it with `cd jetbrains-plugin && ./gradlew buildPlugin` and install `build/distributions/*.zip` with **Settings → Plugins → ⚙ → Install Plugin from Disk**. It starts Forge Studio if it isn't running and reads the token from `~/.config/forge-studio/token`.
@@ -174,6 +178,8 @@ See `packaging/README.md` for details.
 
 ## Plugins
 Settings → Plugins installs plugins from a folder or a Git URL, or scaffolds a new one. A plugin is a folder with `.claude-plugin/plugin.json` and optional `commands/`, `agents/`, `skills/`, `.mcp.json` and `README.md`. Claude Code loads them natively; the built-in engine supports commands, agents and skills (not MCP). They live in `~/.config/forge-studio/plugins`.
+Settings → Plugins also lists **Claude Code's own plugins** (installed with `/plugin` or synced from your claude.ai account), which are already active in Claude Code chats.
+
 
 ## Profiles & settings
 - **Profiles**: local (optional PIN) or Google sign-in (one-time Desktop-app OAuth client setup).
@@ -187,7 +193,7 @@ Settings → Plugins installs plugins from a folder or a Git URL, or scaffolds a
   - Android.
 
 ## Preview
-- **Preview** (Agent mode): static server with live reload, or any dev command (URL auto-detected, `npm install` on first run). Device sizes are available. For a Flutter project, **Start** runs the web app (`flutter run -d web-server`) with hot reload from Flutter mode.
+- **Preview** (Agent mode): static server with live reload, or any dev command (URL auto-detected; npm, pnpm, Yarn or **Bun** picked from the project's lockfile, with dependencies installed on first run; edited CSS/JS always reloads fresh). Device sizes are available. For a Flutter project, **Start** runs the web app (`flutter run -d web-server`) with hot reload from Flutter mode.
 - **Processes** lists dev servers, Gradle and Flutter builds, Flutter runs, logcat, emulators and clones, with their logs.
 - Android Studio doesn't need to be open for anything in Android mode; **Smooth window** also opens scrcpy in its own window.
 

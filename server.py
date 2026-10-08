@@ -268,7 +268,7 @@ def tool_env():
     jh = find_java_home()
     if jh:
         env["JAVA_HOME"] = jh
-    extra = [f"{HOME}/.local/node/bin", f"{HOME}/.local/bin"]
+    extra = [f"{HOME}/.local/node/bin", f"{HOME}/.local/bin", f"{HOME}/.bun/bin"]
     fl = flutter_path()
     if fl:
         extra = [str(Path(fl).parent), f"{HOME}/.pub-cache/bin"] + extra
@@ -329,6 +329,24 @@ def flutter_info(path: Path):
             "example": (path / "example" / "pubspec.yaml").is_file()}
 
 
+LOCKFILES = [("bun.lock", "bun"), ("bun.lockb", "bun"), ("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("package-lock.json", "npm")]
+
+
+def package_manager(d: Path, top: Path):
+    """npm, pnpm, yarn or bun: package.json's "packageManager" field, else the lockfile here or in the project root."""
+    try:
+        declared = (json.loads((d / "package.json").read_text()).get("packageManager") or "").split("@")[0]
+    except Exception:
+        declared = ""
+    if declared in ("npm", "pnpm", "yarn", "bun"):
+        return declared
+    for folder in (d, top):
+        for lock, pm in LOCKFILES:
+            if (folder / lock).exists():
+                return pm
+    return "npm"
+
+
 def web_roots(path: Path):
     roots = []
 
@@ -340,8 +358,9 @@ def web_roots(path: Path):
                 scripts = json.loads(pkg.read_text()).get("scripts", {})
             except Exception:
                 scripts = {}
-            cmd = next((f"npm run {s}" for s in ("dev", "start", "serve", "preview") if s in scripts), "npm start")
-            roots.append({"dir": str(d), "rel": rel, "kind": "node", "command": cmd,
+            pm = package_manager(d, path)
+            cmd = next((f"{pm} run {s}" for s in ("dev", "start", "serve", "preview") if s in scripts), f"{pm} start")
+            roots.append({"dir": str(d), "rel": rel, "kind": "node", "command": cmd, "pm": pm,
                           "installed": (d / "node_modules").is_dir()})
         elif (d / "index.html").exists():
             roots.append({"dir": str(d), "rel": rel, "kind": "static", "command": None})
@@ -593,6 +612,34 @@ def list_plugins(full=False):
             for k in ("commands", "agents", "skills"):
                 p[k] = [{"name": i["name"], "description": i["description"]} for i in p[k]]
         out.append(p)
+    return out
+
+
+def claude_code_plugins():
+    """Plugins Claude Code loads by itself (so they're already active in Claude Code chats): installed from a marketplace
+    (~/.claude/plugins/installed_plugins.json) and synced from your claude.ai account (~/.claude/plugins/synced)."""
+    root, out, seen = HOME / ".claude" / "plugins", [], set()
+    dirs = []
+    try:
+        inst = json.loads((root / "installed_plugins.json").read_text()).get("plugins", {})
+        for key, recs in inst.items():
+            for r in recs if isinstance(recs, list) else [recs]:
+                if r.get("installPath"):
+                    dirs.append((Path(r["installPath"]), "marketplace " + key.partition("@")[2] if "@" in key else "marketplace"))
+    except (OSError, ValueError, AttributeError):
+        pass
+    for bucket in sorted((root / "synced").glob("*/")) if (root / "synced").is_dir() else []:
+        dirs += [(d, "your claude.ai account") for d in sorted(bucket.iterdir()) if (d / ".claude-plugin" / "plugin.json").is_file()]
+    for d, source in dirs:
+        try:
+            p = read_plugin(d)
+        except (ValueError, OSError):
+            continue
+        if p["name"] in seen:
+            continue
+        seen.add(p["name"])
+        out.append({"name": p["name"], "version": p.get("version", ""), "description": p.get("description", ""), "source": source,
+                    "skills": len(p["skills"]), "commands": len(p["commands"]), "agents": len(p["agents"]), "mcp": p["mcp"]})
     return out
 
 
@@ -904,6 +951,30 @@ class Run:
         threading.Thread(target=lambda: [err_lines.append(l) for l in self.popen.stderr], daemon=True).start()
         return err_lines
 
+    def keep_images(self, ev):
+        """Images inside tool results (a screenshot the agent took or an image file it read) are saved under the
+        profile, and the result gets their paths, so the chat shows what the agent was looking at."""
+        content = ev.get("message", {}).get("content")
+        for b in content if isinstance(content, list) else []:
+            if b.get("type") != "tool_result" or not isinstance(b.get("content"), list):
+                continue
+            paths = []
+            for x in b["content"]:
+                src = (x.get("source") or {}) if isinstance(x, dict) and x.get("type") == "image" else {}
+                if src.get("type") != "base64" or not src.get("data"):
+                    continue
+                ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}.get(src.get("media_type"), ".png")
+                d = self.prof.dir / "seen" / self.cid
+                d.mkdir(parents=True, exist_ok=True)
+                f = d / f"{uuid.uuid4().hex[:12]}{ext}"
+                try:
+                    f.write_bytes(base64.b64decode(src["data"]))
+                    paths.append(str(f))
+                except (ValueError, OSError):
+                    pass
+            if paths:
+                b["_images"] = paths
+
     # -- Claude Code (native: streaming, approvals, images, providers)
     def run_claude(self):
         exe = shutil.which("claude", path=tool_env()["PATH"])
@@ -970,6 +1041,11 @@ class Run:
             if ev.get("type") == "control_request":
                 self.on_control(ev)
                 continue
+            if ev.get("type") == "rate_limit_event":
+                record_limits("claude", ev.get("rate_limit_info") or {})
+                continue
+            if ev.get("type") == "user":
+                self.keep_images(ev)
             slim = slim_event(ev)
             if not slim:
                 continue
@@ -1457,6 +1533,22 @@ DELIVERABLE_EXT = {".zip", ".tar", ".gz", ".tgz", ".7z", ".pdf", ".docx", ".doc"
 
 
 APP_VERSION = "1.2.0"
+USAGE_FILE = CONFIG_DIR / "usage.json"
+USAGE = read_json(USAGE_FILE, {})
+
+
+def record_limits(agent, info):
+    """Latest plan limits reported by an agent CLI (e.g. Claude Code's 5-hour and weekly windows)."""
+    wins = {k: {"used": v.get("utilization"), "resets": v.get("resetsAt")} for k, v in (info.get("unifiedWindows") or {}).items()
+            if isinstance(v, dict)}
+    if not wins and info.get("rateLimitType"):
+        wins = {info["rateLimitType"]: {"used": info.get("utilization"), "resets": info.get("resetsAt")}}
+    USAGE[agent] = {"windows": wins, "status": info.get("status"), "overage": info.get("isUsingOverage"), "at": time.time()}
+    try:
+        write_json(USAGE_FILE, USAGE)
+    except OSError:
+        pass
+    emit({"type": "usage", "agent": agent, "usage": USAGE[agent]})
 SERVER_FILE = Path(__file__).resolve()
 SERVER_MTIME = SERVER_FILE.stat().st_mtime  # an update replaces this file; the running server then knows it's stale
 
@@ -1662,7 +1754,8 @@ def slim_event(ev):
                 c = b.get("content")
                 if isinstance(c, list):
                     c = "\n".join(x.get("text", "") for x in c if isinstance(x, dict))
-                out.append({"id": b.get("tool_use_id"), "content": clip(c), "error": b.get("is_error", False)})
+                out.append({"id": b.get("tool_use_id"), "content": clip(c), "error": b.get("is_error", False),
+                            **({"images": b["_images"]} if b.get("_images") else {})})
         return {"type": "tool_results", "results": out} if out else None
     if t == "system" and ev.get("subtype") == "api_retry":
         return {"type": "retry", "attempt": ev.get("attempt"), "max": ev.get("max_retries"),
@@ -1670,9 +1763,13 @@ def slim_event(ev):
     if t == "system" and ev.get("subtype") == "init":
         return {"type": "init", "session": ev.get("session_id"), "model": ev.get("model"), "cwd": ev.get("cwd")}
     if t == "result" or ("total_cost_usd" in ev and "duration_ms" in ev):
+        u = ev.get("usage") or {}
+        cached = (u.get("cache_read_input_tokens") or 0) + (u.get("cache_creation_input_tokens") or 0)
         return {"type": "result", "cost": ev.get("total_cost_usd"), "duration": ev.get("duration_ms"),
                 "turns": ev.get("num_turns"), "error": ev.get("is_error"),
-                "denials": ev.get("permission_denials") or []}
+                "denials": ev.get("permission_denials") or [],
+                "tokens": (u.get("input_tokens") or 0) + cached + (u.get("output_tokens") or 0) or None,
+                "tok": {"in": u.get("input_tokens") or 0, "cached": cached, "out": u.get("output_tokens") or 0} if u else None}
     return None
 
 
@@ -1753,9 +1850,10 @@ def start_preview(project, directory, command=None):
 
     if command:
         tool = command.split()[0]
-        if tool in ("npm", "npx", "yarn", "pnpm") and not shutil.which(tool, path=env["PATH"]):
-            raise ValueError(f"`{tool}` is not installed.")
-        if tool in ("npm", "yarn", "pnpm") and (d / "package.json").exists() and not (d / "node_modules").is_dir():
+        if tool in ("npm", "npx", "yarn", "pnpm", "bun", "bunx") and not shutil.which(tool, path=env["PATH"]):
+            hint = " Install it in Settings → Setup." if tool in ("bun", "bunx", "npm", "npx") else ""
+            raise ValueError(f"`{tool}` is not installed.{hint}")
+        if tool in ("npm", "yarn", "pnpm", "bun") and (d / "package.json").exists() and not (d / "node_modules").is_dir():
             command = f"{tool} install && {command}"  # first run: fetch dependencies
         rec = start_proc(command, str(d), "preview", project, f"preview: {command}", shell=True, env=env,
                          on_line=lambda l: (m := URL_RE.search(ANSI_RE.sub("", l))) and set_url(m.group(0)))
@@ -2893,6 +2991,8 @@ SETUP_TASKS = {
     "jdk": setup_jdk, "android-sdk": setup_android_sdk, "scrcpy": setup_scrcpy, "node": setup_node, "flutter": setup_flutter,
     "claude": lambda: setup_npm_cli("@anthropic-ai/claude-code", "claude"),
     "codex": lambda: setup_npm_cli("@openai/codex", "codex"),
+    "bun": lambda: setup_npm_cli("bun", "bun"),
+    "freebuff": lambda: setup_npm_cli("freebuff", "freebuff"),
 }
 
 
@@ -2925,11 +3025,18 @@ def setup_status():
         {"id": "codex", "group": "Agents", "name": "Codex CLI", "ok": bool(which("codex")), "detail": which("codex"),
          "install": True, "optional": True, "link": "https://github.com/openai/codex",
          "note": "Optional. No CLI at all? Pick the Built-in agent and add an API key in Models & Keys."},
+        {"id": "freebuff", "group": "Agents", "name": "Freebuff", "ok": bool(which("freebuff")), "detail": which("freebuff"),
+         "install": True, "optional": True, "link": "https://freebuff.com",
+         "note": "Optional, free (ad-supported) coding agent. It only has its own terminal interface, so Forge opens it in a "
+                 "terminal for your project (engine picker → Freebuff) instead of in the chat."},
         {"id": "git", "group": "Code", "name": "Git", "ok": bool(which("git")), "detail": which("git"), "install": False,
          "link": "https://git-scm.com/downloads", "cmd": git_cmd, "note": "For Source Control, cloning and the Git status bar."},
         {"id": "node", "group": "Code", "name": "Node.js (LTS)", "ok": bool(which("node")), "detail": which("node"),
          "install": True, "optional": True, "link": "https://nodejs.org/en/download",
          "note": "For npm dev servers in Preview. Installs to ~/.local/node."},
+        {"id": "bun", "group": "Code", "name": "Bun", "ok": bool(which("bun")), "detail": which("bun"), "install": True,
+         "optional": True, "link": "https://bun.sh",
+         "note": "Fast JavaScript runtime and package manager. Preview picks it automatically for projects with a bun.lock."},
         {"id": "jdk", "group": "Android", "name": "Java (JDK 17+)", "ok": bool(jdk),
          "detail": jdk and f"JDK {jdk_homes()[jdk]} · {jdk}", "install": True, "link": "https://adoptium.net/temurin/releases/",
          "note": "Builds Android apps. Installs Temurin 21 (LTS) to ~/.config/forge-studio/tools/jdk."},
@@ -3001,10 +3108,29 @@ def save_upload(prof, name, data):
             "mime": mimetypes.guess_type(name)[0] or "application/octet-stream"}
 
 
+def open_in_terminal(argv, cwd):
+    """Start a command in the user's terminal emulator, in `cwd`."""
+    cmd = shlex.join(argv)
+    if IS_MAC:
+        script = f'tell application "Terminal" to do script "cd {shlex.quote(cwd)} && {cmd}"'
+        subprocess.Popen(["osascript", "-e", script, "-e", 'tell application "Terminal" to activate'])
+        return "Terminal"
+    env = tool_env()
+    for term, args in (("x-terminal-emulator", ["-e"]), ("gnome-terminal", ["--"]), ("konsole", ["-e"]), ("xfce4-terminal", ["-x"]),
+                       ("deepin-terminal", ["-e"]), ("kitty", []), ("alacritty", ["-e"]), ("wezterm", ["start", "--"]),
+                       ("foot", []), ("tilix", ["-e"]), ("xterm", ["-e"])):
+        exe = shutil.which(term, path=env["PATH"])
+        if exe:
+            subprocess.Popen([exe, *args, *argv], cwd=cwd, env=env, start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return term
+    raise ValueError("No terminal app found. Run this in a terminal: cd " + shlex.quote(cwd) + " && " + cmd)
+
+
 def allowed_file(prof, path):
     """Files the UI may open/download: inside a known project or this profile's uploads."""
     f = Path(path).expanduser().resolve()
-    roots = [(prof.dir / "uploads").resolve(), (prof.dir / "outputs").resolve()] + [Path(p).resolve() for p in project_paths()]
+    roots = [(prof.dir / d).resolve() for d in ("uploads", "outputs", "seen")] + [Path(p).resolve() for p in project_paths()]
     if not f.is_file() or not any(f.is_relative_to(r) for r in roots):
         raise ValueError("File not found or not inside one of your projects")
     return f
@@ -3642,7 +3768,8 @@ class Handler(BaseHTTPRequestHandler):
             "tools": {"claude": bool(shutil.which("claude", path=env_path)), "adb": adb_path(),
                       "studio": find_studio(), "java": find_java_home(), "emulator": emulator_path(),
                       "scrcpy": scrcpy_path(), "stream": bool(scrcpy_server()[1]), "node": shutil.which("node", path=env_path),
-                      "sdk": str(find_sdk() or ""), "git": shutil.which("git", path=env_path), "flutter": flutter_version()},
+                      "sdk": str(find_sdk() or ""), "git": shutil.which("git", path=env_path), "flutter": flutter_version(),
+                      "freebuff": bool(shutil.which("freebuff", path=env_path))},
             "previews": {k: {"url": v["url"], "dir": v["dir"]} for k, v in PREVIEWS.items()},
             "running": [cid for cid, r in RUNS.items() if r.running() and cid in prof.data["chats"]],
             # every saved conversation (newest first) for the sidebar: it survives restarts, unlike the old session-only task list
@@ -3650,6 +3777,8 @@ class Handler(BaseHTTPRequestHandler):
                              key=lambda c: c.get("updated") or c.get("created") or 0, reverse=True)[:300],
             "agents": list_agents(),
             "plugins": list_plugins(),
+            "ccPlugins": claude_code_plugins(),
+            "usage": USAGE,
             "prefs": prof.data["settings"],
             "web": web_access_info(),
             "current": prof.data["current"],
@@ -3813,6 +3942,13 @@ class Handler(BaseHTTPRequestHandler):
             _jb_cache["t"] = 0
             save_config()
             return None
+        if path == "/api/agent/terminal":  # agents that only have their own terminal UI (Freebuff)
+            exe = shutil.which("freebuff", path=tool_env()["PATH"])
+            if not project:
+                raise ValueError("Open a project first")
+            if b.get("agent") != "freebuff" or not exe:
+                raise ValueError("Freebuff isn't installed. Install it in Settings → Setup.")
+            return {"terminal": open_in_terminal([exe, "--cwd", project], project)}
         if path == "/api/app/restart":
             threading.Thread(target=restart_server, daemon=True).start()
             return None
@@ -3836,7 +3972,7 @@ class Handler(BaseHTTPRequestHandler):
             ap["run"].answer(b["id"], b["decision"], b.get("answers"), b.get("note"))
             return None
         if path == "/api/prefs":
-            prof.data["settings"].update({k: v for k, v in b.items() if k in ("theme", "accent", "density", "mode", "agent", "notify", "sound",
+            prof.data["settings"].update({k: v for k, v in b.items() if k in ("theme", "accent", "density", "mode", "agent", "notify", "sound", "usage",
                                                                                  "nApproval", "nDone", "nBuild", "nCrash")})
             prof.save()
             return prof.data["settings"]

@@ -93,7 +93,7 @@ const pkey = (k) => `fs:${S.profile?.id}:${k}`;
 const ACCENTS = [["Blue", "#0A84FF"], ["Purple", "#BF5AF2"], ["Pink", "#FF375F"], ["Red", "#FF453A"], ["Orange", "#FF9F0A"],
   ["Yellow", "#FFD60A"], ["Green", "#30D158"], ["Teal", "#40C8E0"], ["Graphite", "#8E8E93"]];
 function applyAppearance(p = {}) {
-  const theme = p.theme || "dark", accent = p.accent || "#0A84FF", density = p.density || "regular";
+  const theme = p.theme || "dark", accent = p.accent || "#0A84FF", density = p.density || "compact";
   const resolved = theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme;
   const root = document.documentElement;
   root.dataset.theme = resolved;
@@ -210,6 +210,43 @@ function toolBody(it) {
   if (it.result != null) h += toolSection(it.error ? "Error output" : "Output", "t-out", it.result || "(no output)");
   return h;
 }
+const fmtTokens = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k" : String(n);
+// ---- plan limits (Claude Code reports its 5-hour and weekly windows during each run)
+const WIN_NAMES = { five_hour: "5h", seven_day: "Week", seven_day_opus: "Opus wk", seven_day_sonnet: "Sonnet wk" };
+function renderUsage() {
+  const m = $("#usageMeter"), u = S.usage?.claude;
+  const show = S.prefs?.usage !== false && currentAgent()?.kind === "claude" && u?.windows && Object.keys(u.windows).length;
+  m.hidden = !show;
+  if (!show) return;
+  const wins = Object.entries(u.windows).filter(([, w]) => w.used != null);
+  m.innerHTML = wins.slice(0, 2).map(([k, w]) => {
+    const pct = Math.round(w.used * 100), lvl = pct >= 90 ? "hi" : pct >= 70 ? "mid" : "";
+    return `<span class="um ${lvl}"><span class="um-name">${WIN_NAMES[k] || k}</span><span class="um-bar"><i style="width:${Math.min(100, pct)}%"></i></span><span class="um-pct">${pct}%</span></span>`;
+  }).join("");
+  const until = (t) => { if (!t) return ""; const s = t - Date.now() / 1000; return s <= 0 ? "now" : s < 3600 ? Math.ceil(s / 60) + " min" : s < 86400 ? Math.round(s / 3600) + " h" : Math.round(s / 86400) + " days"; };
+  m.title = "Claude plan usage\n" + wins.map(([k, w]) => `${WIN_NAMES[k] || k}: ${Math.round(w.used * 100)}% used, resets in ${until(w.resets)}`).join("\n")
+    + (u.overage ? "\nUsing extra usage (overage)" : "") + `\nUpdated ${ago(u.at)} · turn off in Settings → General`;
+}
+const IMG_RE = /\.(png|jpe?g|gif|webp|bmp|avif)$/i;
+// ---- image viewer: any chat image, attachment, file card or agent screenshot opens large
+function openLightbox(src, name) {
+  closeLightbox();
+  const box = document.createElement("div"); box.id = "lightbox"; box.className = "lightbox";
+  box.innerHTML = `<div class="lb-bar"><span>${esc(name || "")}</span><a class="btn small" href="${esc(src)}" target="_blank" rel="noopener">${ic("external")} Open</a>
+    <button class="icon-btn" title="Close (Esc)">${ic("x")}</button></div><img src="${esc(src)}" alt="">`;
+  box.onclick = (e) => { if (!e.target.closest("a")) closeLightbox(); };
+  document.body.append(box);
+}
+function closeLightbox() { $("#lightbox")?.remove(); }
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#lightbox")) { closeLightbox(); e.stopPropagation(); } }, true);
+document.addEventListener("click", (e) => {
+  const t = e.target.closest(".shot-thumb, .msg-files a:has(img), .out-file img, .att img, .msg img");
+  if (!t || e.ctrlKey || e.metaKey || e.button) return;
+  const img = t.tagName === "IMG" ? t : t.querySelector("img");
+  if (!img) return;
+  e.preventDefault(); e.stopPropagation();
+  openLightbox(t.dataset.src || img.src, img.alt || img.closest("[title]")?.title || "");
+});
 function renderItem(it) {
   let el;
   if (it.k === "user") {
@@ -273,6 +310,15 @@ function renderItem(it) {
     if (el.open) fill();
     el.ontoggle = () => { it._open = el.open; if (el.open) fill(); };
     el.querySelector("[data-edit]")?.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); if (typeof openInEditor === "function") openInEditor(fp); });
+    // what the agent looked at: screenshots it took and images it read, shown under the card (click to enlarge)
+    const shots = it.images?.length ? it.images : it.name === "Read" && IMG_RE.test(it.input?.file_path || "") && it.result != null && !it.error ? [it.input.file_path] : [];
+    if (shots.length) {
+      const wrap = document.createElement("div"); wrap.className = "tool-group";
+      const strip = document.createElement("div"); strip.className = "tool-shots";
+      strip.innerHTML = shots.slice(0, 6).map((p) => `<button class="shot-thumb" data-src="${esc(fileUrl(p))}" title="${esc(p.split("/").pop())}"><img src="${esc(fileUrl(p))}" alt="" loading="lazy" decoding="async" onerror="this.parentNode.remove()"></button>`).join("");
+      wrap.append(el, strip);
+      el = wrap;
+    }
   } else if (it.k === "approval") el = renderApproval(it);
   else if (it.k === "meta") { el = document.createElement("div"); el.className = "meta" + (it.err ? " err" : ""); el.textContent = it.text; }
   it.el = el;
@@ -360,7 +406,7 @@ function applyEvent(items, ev) {
     case "tool_results":
       for (const r of ev.results) {
         const it = idx.get("tool:" + r.id);
-        if (it) { it.result = r.content; it.error = r.error; changed.push(it); }
+        if (it) { it.result = r.content; it.error = r.error; if (r.images?.length) it.images = r.images; changed.push(it); }
       }
       break;
     case "approval":
@@ -374,9 +420,11 @@ function applyEvent(items, ev) {
     case "result": {
       const bits = [];
       if (ev.duration) bits.push((ev.duration / 1000).toFixed(1) + "s");
-      if (ev.turns) bits.push(ev.turns + " turns");
-      if (ev.cost) bits.push("$" + ev.cost.toFixed(3));
-      if (ev.tokens) bits.push(ev.tokens.toLocaleString() + " tokens");
+      if (ev.turns) bits.push(ev.turns + (ev.turns === 1 ? " turn" : " turns"));
+      if (S.prefs?.usage !== false) {
+        if (ev.tokens) bits.push(fmtTokens(ev.tokens) + " tokens" + (ev.tok?.cached ? ` (${fmtTokens(ev.tok.cached)} cached)` : ""));
+        if (ev.cost) bits.push("$" + ev.cost.toFixed(3));
+      }
       push({ k: "meta", text: (ev.error ? "Stopped with an error" : "Done") + (bits.length ? " · " + bits.join(" · ") : "") });
       if (ev.denials?.length) {
         const names = [...new Set(ev.denials.map((d) => d.tool_name))].join(", ");
@@ -535,8 +583,12 @@ function renderNextActions() {
 function updateBusy() {
   const cid = chatId();
   const busy = !!(cid && S.running[cid]);
-  $("#btnStop").hidden = !busy;
-  $("#btnSend").disabled = !S.cur || busy;
+  // one button: Send, or Stop while the agent is working on this chat
+  const b = $("#btnSend");
+  b.classList.toggle("stop", busy);
+  b.disabled = !S.cur;
+  b.title = busy ? "Stop the agent (Ctrl+Shift+Backspace)" : "Send (Enter)";
+  b.innerHTML = busy ? `${ic("stop")}<span>Stop</span>` : `<span>Send</span><kbd>↵</kbd>`;
   $("#typing")?.remove();
   clearInterval(S.typingT);
   if (busy) {
@@ -616,7 +668,7 @@ function agentChanged(save = true) {
   $("#effort").hidden = $("#btnFast").hidden = kind !== "claude";
   styleChanged(false);
   renderModels();
-  syncComposer();
+  syncComposer(); renderUsage();
 }
 function styleChanged(save = true) {
   const st = $("#style").value;
@@ -675,9 +727,19 @@ function openEnginePop() {
       ? `<div class="pop-sub">${esc(g.label)}</div>` + [...g.children].map((o) => `<button class="pop-item${o.value === $("#model").value ? " on" : ""}" data-model="${esc(o.value)}"><span>${esc(o.textContent)}</span>${o.value === $("#model").value ? ic("check") : ""}</button>`).join("")
       : `<button class="pop-item${g.value === $("#model").value ? " on" : ""}" data-model="${esc(g.value)}"><span>${esc(g.textContent)}</span>${g.value === $("#model").value ? ic("check") : ""}</button>`).join("");
     const claude = !$("#effort").hidden;
-    pop.innerHTML = `<div class="pop-cols"><div class="pop-col"><div class="pop-h">Agent</div>${agents}</div><div class="pop-col models"><div class="pop-h">Model</div>${models}</div></div>`
+    const fb = S.tools?.freebuff
+      ? `<button class="pop-item" data-terminal="freebuff" title="Freebuff only has its own terminal interface, so it opens in a terminal for this project">${ic("terminal")}<span>Freebuff <small class="dim">· opens a terminal</small></span>${ic("external")}</button>`
+      : `<button class="pop-item dimmed" data-setup="freebuff" title="A free, ad-supported coding agent">${ic("terminal")}<span>Freebuff <small class="dim">· install</small></span></button>`;
+    pop.innerHTML = `<div class="pop-cols"><div class="pop-col"><div class="pop-h">Agent</div>${agents}<div class="pop-sep"></div>${fb}</div><div class="pop-col models"><div class="pop-h">Model</div>${models}</div></div>`
       + (claude ? `<div class="pop-foot"><div class="pop-h">Reasoning</div><div class="pop-seg">${[["", "Auto"], ...Object.entries(EFFORT_SHORT)].map(([v, t]) => `<button data-effort="${v}" class="${$("#effort").value === v ? "on" : ""}">${t}</button>`).join("")}</div>
         <label class="pop-toggle">${ic("zap")}<span><b>Fast mode</b><small>Quicker answers from the same model (supported models)</small></span><span class="switch"><input type="checkbox" id="popFast" ${$("#btnFast").classList.contains("on") ? "checked" : ""}><i></i></span></label></div>` : "");
+    pop.querySelector("[data-terminal]")?.addEventListener("click", act(async () => {
+      closePopover();
+      if (!S.cur) throw new Error("Pick a project first");
+      const r = await api("/api/agent/terminal", { project: S.cur, agent: "freebuff" });
+      toast(`Freebuff opened in ${r.terminal} for ${project()?.name}`);
+    }));
+    pop.querySelector("[data-setup]")?.addEventListener("click", () => { closePopover(); openSettings("setup"); });
     pop.querySelectorAll("[data-agent]").forEach((b) => (b.onclick = () => { pickSelect($("#agent"), b.dataset.agent); openEnginePop(); }));
     pop.querySelectorAll("[data-model]").forEach((b) => (b.onclick = () => { pickSelect($("#model"), b.dataset.model); closePopover(); if (b.dataset.model.endsWith("::__custom")) $("#customModel").focus(); }));
     pop.querySelectorAll("[data-effort]").forEach((b) => (b.onclick = () => { pickSelect($("#effort"), b.dataset.effort); pop.querySelectorAll("[data-effort]").forEach((x) => x.classList.toggle("on", x === b)); }));
@@ -700,6 +762,7 @@ $$("#styleSeg button").forEach((b) => (b.onclick = () => pickSelect($("#style"),
 $("#customModel").addEventListener("input", syncComposer);
 // project + branch under the composer
 function renderComposerCtx() {
+  renderUsage();
   const p = project(), g = typeof C !== "undefined" && S.cur ? C.git : null;
   $("#composerCtx").hidden = !p;
   if (!p) return;
@@ -707,6 +770,7 @@ function renderComposerCtx() {
   $("#ctxBranch").hidden = !g?.repo;
   if (g?.repo) $("#ctxBranch span").textContent = (g.branch || "HEAD") + (g.files?.length ? ` · ${g.files.length} changed` : "");
 }
+$("#usageMeter").onclick = () => toast($("#usageMeter").title.split("\n").slice(1, -1).join(" · "));
 $("#ctxProject").onclick = (e) => $("#btnProj").onclick(e);
 $("#ctxBranch").onclick = act(async () => {
   const b = $("#ctxBranch").getBoundingClientRect();
@@ -973,7 +1037,7 @@ async function loadState() {
   checkUpdated(st);  // first, so it shows even if an old server's answer breaks something below
   Object.assign(S, { profile: st.profile, projects: st.projects, tools: st.tools, previews: st.previews, procs: st.procs,
     providers: st.providers, settings: st.settings, agents: st.agents, plugins: st.plugins || [], prefs: st.prefs || {}, web: st.web,
-    flutter: st.flutter || {}, recent: st.recent || [] });
+    flutter: st.flutter || {}, recent: st.recent || [], usage: st.usage || {}, ccPlugins: st.ccPlugins || [] });
   for (const c of S.recent) S.meta[c.id] ??= c;
   for (const [proj, r] of Object.entries(S.flutter)) if (r.device === "web-server") S.previews[proj] = { url: r.url, flutter: true };
   for (const [proj, cid] of Object.entries(st.current)) if (!(proj in S.curChat)) S.curChat[proj] = cid;
@@ -1152,7 +1216,7 @@ function openSettings(sec = "general") {
   $("#setHideTest").checked = !!S.settings?.hideTest;
   $("#setJbMcp").checked = S.settings?.jbMcp !== false;
   $("#setJbMcpUrl").value = S.settings?.jbMcpUrl || "";
-  fillProfile(); renderAgentList(); renderPluginList(); renderProviders(); renderWeb();
+  fillProfile(); renderAgentList(); renderPluginList(); renderCcPlugins(); renderProviders(); renderWeb();
   $("#setStudio").value = S.settings?.studio_path || "";
   const t = S.tools;
   $("#setTools").innerHTML = `<div class="form-group">${[["Android Studio", t.studio], ["SDK", t.sdk], ["adb", t.adb], ["Java", t.java], ["Node.js", t.node], ["scrcpy", t.scrcpy]]
@@ -1173,6 +1237,7 @@ function renderNotifySettings() {
   const p = S.prefs, perm = "Notification" in window ? Notification.permission : "unsupported";
   $("#setNotify").checked = !!p.notify && perm === "granted";
   $("#setSound").checked = p.sound !== false;
+  $("#setUsage").checked = p.usage !== false;
   for (const k of Object.values(NOTIFY_KINDS)) $("#" + k).checked = p[k] !== false;
   $("#notifState").textContent = perm === "unsupported" ? "Not available here (needs the app on this computer or HTTPS)"
     : perm === "denied" ? "Blocked — allow notifications for this site in the browser's site settings" : "Shown when Forge Studio isn't the active window";
@@ -1185,6 +1250,7 @@ $("#setNotify").onchange = act(async () => {
   }
   await setPref({ notify: $("#setNotify").checked }); renderNotifySettings();
 });
+$("#setUsage").onchange = act(async () => { await setPref({ usage: $("#setUsage").checked }); renderUsage(); if (chatId()) { S.loaded[chatId()] = false; await openChat(chatId()); } });
 $("#setSound").onchange = () => { setPref({ sound: $("#setSound").checked }); if ($("#setSound").checked) chime("done"); };
 for (const k of Object.values(NOTIFY_KINDS)) $("#" + k).onchange = () => setPref({ [k]: $("#" + k).checked });
 $("#btnTestNotify").onclick = () => {
@@ -1258,6 +1324,17 @@ function renderPluginList() {
       if (!confirm(`Remove plugin "${p.name}"?`)) return;
       await api("/api/plugins/remove", { id: p.dir }); await loadState(); renderPluginList();
     }));
+    ul.append(li);
+  }
+}
+function renderCcPlugins() {
+  const ul = $("#ccPluginList");
+  ul.innerHTML = S.ccPlugins?.length ? "" : '<li class="dim">Claude Code has no plugins installed (or isn\'t set up on this computer).</li>';
+  for (const p of S.ccPlugins || []) {
+    const parts = [[p.skills, "skill"], [p.commands, "command"], [p.agents, "agent"], [p.mcp.length, "MCP server"]].filter(([n]) => n).map(([n, w]) => `${n} ${w}${n > 1 ? "s" : ""}`);
+    const li = document.createElement("li");
+    li.innerHTML = `${ic("plug")}<span class="grow"><b>${esc(p.name)}</b> ${p.version ? `<span class="badge">${esc(p.version)}</span>` : ""}
+      <small>${esc(p.description || "No description")}</small><small>${esc([...parts, "from " + p.source].join(" · "))}</small></span><span class="badge ok">Active in Claude Code</span>`;
     ul.append(li);
   }
 }
@@ -1879,6 +1956,8 @@ function connect() {
         if (BUILD_KINDS.has(ev.kind) && ev.project !== S.cur) toast(`${ev.label} ${ev.code === 0 ? "finished" : "failed"} in ${ev.project.split("/").pop()}`, ev.code !== 0);
         renderProcs(); break;
       }
+      case "usage":
+        S.usage = { ...(S.usage || {}), [ev.agent]: ev.usage }; renderUsage(); break;
       case "preview_url":
         S.previews[ev.project] = { url: ev.url, flutter: ev.flutter };
         if (S.profile) store.set(pkey("url:" + ev.project), ev.url);
@@ -2144,7 +2223,7 @@ document.addEventListener("keydown", (e) => {
   else if (mod && !e.shiftKey && e.key === ",") { e.preventDefault(); openSettings("general"); }
   else if (e.altKey && !mod && k === "n") { e.preventDefault(); act(() => openChat(null))(); $("#prompt").focus(); }
   else if (mod && e.shiftKey && k === "h") { e.preventDefault(); $("#btnHistory").click(); }
-  else if (mod && e.shiftKey && e.key === "Backspace" && !$("#btnStop").hidden) { e.preventDefault(); $("#btnStop").click(); }
+  else if (mod && e.shiftKey && e.key === "Backspace" && S.running[chatId()]) { e.preventDefault(); $("#btnStop").click(); }
 });
 
 // copy buttons on code blocks (in replies, thinking and anywhere md() renders); one listener for the whole chat
@@ -2154,7 +2233,7 @@ $("#messages").addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
   copyText(b.closest(".codeblock").querySelector("code").textContent, b);
 });
-$("#composer").onsubmit = (e) => { e.preventDefault(); act(send)(); };
+$("#composer").onsubmit = (e) => { e.preventDefault(); if (S.running[chatId()]) $("#btnStop").click(); else act(send)(); };
 $("#prompt").onkeydown = (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); act(send)(); }
   else if (e.key === "Tab" && e.shiftKey) {  // Shift+Tab cycles Agent → Plan → Chat, like Claude Code
