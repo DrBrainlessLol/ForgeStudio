@@ -617,6 +617,35 @@ def list_plugins(full=False):
     return out
 
 
+_FREE = {"t": 0, "data": None}
+
+
+def free_models():
+    """Models that cost nothing: OpenRouter's free models that can use tools (fetched live, cached an hour; the list
+    changes often) and whatever is installed in a local Ollama."""
+    if _FREE["data"] is None or time.time() - _FREE["t"] > 3600:
+        orr = []
+        try:
+            with urllib.request.urlopen("https://openrouter.ai/api/v1/models", timeout=8) as r:
+                for m in json.load(r).get("data", []):
+                    pr = m.get("pricing") or {}
+                    free = m["id"].endswith(":free") or (pr.get("prompt") == "0" and pr.get("completion") == "0")
+                    if free and "tools" in (m.get("supported_parameters") or []):
+                        name = "Auto: best free model" if m["id"] == "openrouter/free" else (m.get("name") or m["id"]).replace(" (free)", "")
+                        orr.append({"id": m["id"], "name": name, "context": m.get("context_length")})
+            orr.sort(key=lambda m: (m["id"] != "openrouter/free", -(m["context"] or 0)))
+        except (OSError, ValueError):
+            orr = (_FREE["data"] or {}).get("openrouter", [])
+        _FREE.update(t=time.time(), data={"openrouter": orr})
+    ollama = []
+    try:  # local models change whenever you `ollama pull`, so this part isn't cached
+        with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=0.6) as r:
+            ollama = [m["name"] for m in json.load(r).get("models", [])]
+    except (OSError, ValueError):
+        pass
+    return {**_FREE["data"], "ollama": ollama}
+
+
 def claude_code_plugins():
     """Plugins Claude Code loads by itself (so they're already active in Claude Code chats): installed from a marketplace
     (~/.claude/plugins/installed_plugins.json) and synced from your claude.ai account (~/.claude/plugins/synced)."""
@@ -3756,6 +3785,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._app_auth(qs):
             return self._send(401, {"error": "unauthorized"})
         try:
+            if u.path == "/api/models/free" and self._app_auth(qs):
+                return self._send(200, free_models())
             if u.path == "/api/ide/ping":  # JetBrains plugin: is Forge up?
                 return self._send(200, {"ok": True, "version": APP_VERSION, "windows": len(_subs)})
             if u.path == "/api/auth/profiles":

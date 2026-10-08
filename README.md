@@ -110,7 +110,7 @@ The status bar shows the Git branch, the project, the agent's state and (in Andr
 | Agent | Support |
 |---|---|
 | **Claude Code** (recommended) | Streaming, approval prompts, image input, chat resume, model providers |
-| **Built-in (API key, no CLI)** | No CLI needed — talks to an Anthropic-style API directly with your own key. Read/Write/Edit/Bash tools, approvals, images, resume. |
+| **Built-in (API key, no CLI)** | No CLI needed — talks to an Anthropic-style API directly with your own key. Read/Write/Edit/Bash tools, approvals, images, resume. **Free models:** with a free OpenRouter key (no card) the engine picker lists OpenRouter's current free models that can use tools; Groq has a free tier and Ollama runs models locally for free. |
 | **Codex** | Native adapter: shell/file-change cards, image input, resume |
 | Gemini CLI, Qwen Code, opencode, Cursor Agent, Aider | Detected automatically when installed; output streams into the chat |
 | **Freebuff** (free, ad-supported) | Install from Settings → Setup. It has no headless mode, so its own interface runs inside the chat panel in a built-in terminal (one session per project; **System terminal** opens it outside Forge) |

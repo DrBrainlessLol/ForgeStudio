@@ -730,13 +730,23 @@ function openEnginePop() {
     const models = [...$("#model").children].map((g) => g.tagName === "OPTGROUP"
       ? `<div class="pop-sub">${esc(g.label)}</div>` + [...g.children].map((o) => `<button class="pop-item${o.value === $("#model").value ? " on" : ""}" data-model="${esc(o.value)}"><span>${esc(o.textContent)}</span>${o.value === $("#model").value ? ic("check") : ""}</button>`).join("")
       : `<button class="pop-item${g.value === $("#model").value ? " on" : ""}" data-model="${esc(g.value)}"><span>${esc(g.textContent)}</span>${g.value === $("#model").value ? ic("check") : ""}</button>`).join("");
+    const builtin = currentAgent()?.kind === "builtin", orProv = S.providers.find(isOpenRouter);
+    const freeNames = (S.free?.openrouter || []).slice(0, 4).map((m) => m.name.replace(/^[^:]+:\s*/, "")).join(", ") || "gpt-oss, Gemma, Nemotron";
+    const freeBox = builtin && orProv ? "" : `<div class="pop-free">${ic("zap")}<span><b>Free models</b><small>${esc(freeNames)}… ${builtin ? "Add a free OpenRouter key to use them." : "They run on the Built-in agent."}</small></span>
+      <button class="btn small" data-free>${builtin ? "Set up" : orProv ? "Use" : "Set up"}</button></div>`;
     const claude = !$("#effort").hidden;
     const fb = S.tools?.freebuff ? ""
       : `<div class="pop-sep"></div><button class="pop-item dimmed" data-setup="freebuff" title="A free, ad-supported coding agent">${ic("terminal")}<span>Freebuff <small class="dim">· install</small></span></button>`;
-    pop.innerHTML = `<div class="pop-cols"><div class="pop-col"><div class="pop-h">Agent</div>${agents}${fb}</div><div class="pop-col models"><div class="pop-h">Model</div>${models}</div></div>`
+    pop.innerHTML = `<div class="pop-cols"><div class="pop-col"><div class="pop-h">Agent</div>${agents}${fb}</div><div class="pop-col models"><div class="pop-h">Model</div>${freeBox}${models}</div></div>`
       + (claude ? `<div class="pop-foot"><div class="pop-h">Reasoning</div><div class="pop-seg">${[["", "Auto"], ...Object.entries(EFFORT_SHORT)].map(([v, t]) => `<button data-effort="${v}" class="${$("#effort").value === v ? "on" : ""}">${t}</button>`).join("")}</div>
         <label class="pop-toggle">${ic("zap")}<span><b>Fast mode</b><small>Quicker answers from the same model (supported models)</small></span><span class="switch"><input type="checkbox" id="popFast" ${$("#btnFast").classList.contains("on") ? "checked" : ""}><i></i></span></label></div>` : "");
     pop.querySelector("[data-setup]")?.addEventListener("click", () => { closePopover(); openSettings("setup"); });
+    pop.querySelector("[data-free]")?.addEventListener("click", act(async () => {
+      closePopover();
+      if (S.agents.some((x) => x.id === "builtin")) pickSelect($("#agent"), "builtin");
+      if (S.providers.some(isOpenRouter)) { await loadFree(); const f = [...$("#model").options].find((o) => o.parentNode?.label?.startsWith("Free")); if (f) pickSelect($("#model"), f.value); toast("Using a free model on the Built-in agent"); return; }
+      openSettings("models"); editProvider(null, PRESETS.find((p) => p.key === "openrouter-free"));
+    }));
     pop.querySelectorAll("[data-agent]").forEach((b) => (b.onclick = () => { pickSelect($("#agent"), b.dataset.agent); openEnginePop(); }));
     pop.querySelectorAll("[data-model]").forEach((b) => (b.onclick = () => { pickSelect($("#model"), b.dataset.model); closePopover(); if (b.dataset.model.endsWith("::__custom")) $("#customModel").focus(); }));
     pop.querySelectorAll("[data-effort]").forEach((b) => (b.onclick = () => { pickSelect($("#effort"), b.dataset.effort); pop.querySelectorAll("[data-effort]").forEach((x) => x.classList.toggle("on", x === b)); }));
@@ -753,7 +763,7 @@ function openPermPop() {
     pop.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => { pickSelect($("#mode"), b.dataset.mode); closePopover(); }));
   });
 }
-$("#engineChip").onclick = (e) => { e.preventDefault(); $("#popover")?.classList.contains("engine-pop") ? closePopover() : openEnginePop(); };
+$("#engineChip").onclick = (e) => { e.preventDefault(); if ($("#popover")?.classList.contains("engine-pop")) return closePopover(); openEnginePop(); if (!S.free) loadFree().then(() => $("#popover")?.classList.contains("engine-pop") && openEnginePop()); };
 $("#permChip").onclick = (e) => { e.preventDefault(); $("#popover")?.classList.contains("perm-pop") ? closePopover() : openPermPop(); };
 $$("#styleSeg button").forEach((b) => (b.onclick = () => pickSelect($("#style"), b.dataset.style)));
 $("#customModel").addEventListener("input", syncComposer);
@@ -825,6 +835,14 @@ async function updateTermView() {
 $("#btnTermBack").onclick = () => pickSelect($("#agent"), S.lastChatAgent && S.agents.some((x) => x.id === S.lastChatAgent && x.installed) ? S.lastChatAgent : "claude");
 $("#btnTermRestart").onclick = act(async () => { if (T.id) await api("/api/pty/kill", { id: T.id }); T.alive = false; T.id = null; setTimeout(act(updateTermView), 400); });
 $("#btnTermExt").onclick = act(async () => { const r = await api("/api/agent/terminal", { project: S.cur, agent: currentAgent().id }); toast(`Opened in ${r.terminal}`); });
+const isOpenRouter = (p) => /openrouter\.ai/.test(p?.baseUrl || "");
+const isOllama = (p) => /:11434/.test(p?.baseUrl || "");
+async function loadFree(force) {
+  if (S.free && !force) return S.free;
+  try { S.free = await api("/api/models/free"); } catch { S.free = { openrouter: [], ollama: [] }; }
+  if (currentAgent()?.kind === "builtin") renderModels();
+  return S.free;
+}
 function renderModels() {
   const sel = $("#model"), a = currentAgent(), prev = store.get(pkey("model:" + a?.id), "local::");
   sel.innerHTML = "";
@@ -843,8 +861,12 @@ function renderModels() {
   } else if (a?.kind === "builtin") {
     if (!S.providers.length) sel.append(new Option("Add an API key in Settings → Models & Keys", "local::"));
     for (const p of S.providers) {
+      // free models first: OpenRouter's current free list, or what's installed in a local Ollama
+      const free = isOpenRouter(p) ? (S.free?.openrouter || []).map((m) => [m.id, m.name])
+        : isOllama(p) ? (S.free?.ollama || []).map((m) => [m, m]) : [];
+      if (free.length) group(`Free · ${p.name}`, p.id, free);
       if (p.type === "anthropic") group(`Claude · ${p.name}`, p.id, CLAUDE_MODELS);
-      else group(p.name, p.id, p.models.length ? p.models.map((m) => [m, m]) : [["", "Default"]]);
+      else if (!free.length || p.models.length) group(p.name, p.id, p.models.length ? p.models.map((m) => [m, m]) : [["", "Default"]]);
     }
   } else if (a?.kind === "codex") group("Codex (your OpenAI login)", "local", CODEX_MODELS);
   else group(a?.name || "Agent", "local", [["", "Agent's default"]]);
@@ -1394,12 +1416,14 @@ $("#plCreate").onclick = act(async () => {
 const PRESETS = [
   { key: "anthropic", type: "anthropic", api: "anthropic", name: "My Anthropic API key", hint: "Create a key at console.anthropic.com → API keys. Usage is billed to your own Anthropic account." },
   { key: "openai", type: "compatible", api: "openai", name: "OpenAI", baseUrl: "https://api.openai.com/v1", models: ["gpt-5", "gpt-5-mini", "o3"], hint: "Key from platform.openai.com. Uses the OpenAI Chat Completions API." },
+  { key: "openrouter-free", type: "compatible", api: "openai", name: "OpenRouter (free models)", baseUrl: "https://openrouter.ai/api/v1", models: [], free: true,
+    hint: "Free: make an account at openrouter.ai → Keys → Create key (no card needed) and paste it here. Forge lists OpenRouter's current free models that can use tools (gpt-oss, Gemma, Nemotron, …) in the engine picker under Free. Free models have daily request limits." },
   { key: "openrouter", type: "compatible", api: "openai", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", models: ["openai/gpt-5", "google/gemini-2.5-pro", "anthropic/claude-sonnet-4"], hint: "Key from openrouter.ai/keys. Any model id from openrouter.ai/models (GPT, Gemini, Llama, Qwen…)." },
   { key: "deepseek", type: "compatible", api: "openai", name: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", models: ["deepseek-chat", "deepseek-reasoner"], hint: "Key from platform.deepseek.com." },
-  { key: "groq", type: "compatible", api: "openai", name: "Groq", baseUrl: "https://api.groq.com/openai/v1", models: ["llama-3.3-70b-versatile"], hint: "Fast inference. Key from console.groq.com." },
+  { key: "groq", type: "compatible", api: "openai", name: "Groq", baseUrl: "https://api.groq.com/openai/v1", models: ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"], hint: "Very fast, with a free tier (rate-limited). Key from console.groq.com." },
   { key: "kimi", type: "compatible", api: "anthropic", name: "Moonshot Kimi", baseUrl: "https://api.moonshot.ai/anthropic", models: ["kimi-k2-turbo-preview"], hint: "Key from platform.moonshot.ai (Anthropic-compatible endpoint)." },
   { key: "glm", type: "compatible", api: "anthropic", name: "Z.ai GLM", baseUrl: "https://api.z.ai/api/anthropic", models: ["glm-4.6"], hint: "Key from z.ai (Anthropic-compatible endpoint)." },
-  { key: "ollama", type: "compatible", api: "openai", name: "Ollama (local)", baseUrl: "http://localhost:11434/v1", models: ["qwen3-coder", "llama3.1"], hint: "Free and runs on this computer. Install a model with `ollama pull`; no key needed." },
+  { key: "ollama", type: "compatible", api: "openai", name: "Ollama (local)", baseUrl: "http://localhost:11434/v1", models: ["qwen3-coder", "llama3.1"], hint: "Free and private: runs on this computer (needs a capable GPU or plenty of RAM). Install a model with `ollama pull gpt-oss:20b` or `ollama pull gemma3`; no key needed. Installed models appear under Free in the engine picker." },
   { key: "custom", type: "compatible", api: "openai", name: "Custom endpoint", baseUrl: "", models: [], hint: "Any OpenAI- or Anthropic-compatible endpoint. Set the API style below to match." },
 ];
 function renderProviders() {
@@ -1437,7 +1461,14 @@ $("#peSave").onclick = act(async () => {
   await api("/api/providers/save", { provider: { id: $("#peId").value || null, type: $("#peType").value, name: $("#peName").value,
     api: $("#peType").value === "anthropic" ? "anthropic" : $("#peApi").value,
     baseUrl: $("#peUrl").value.trim(), apiKey: $("#peKey").value.trim(), models: $("#peModels").value.split("\n") } });
-  $("#provEdit").hidden = true; await loadState(); renderProviders(); toast("Saved — pick it in the model menu");
+  $("#provEdit").hidden = true; await loadState(); renderProviders();
+  if (/openrouter\.ai|:11434/.test($("#peUrl").value)) {  // free models: switch straight to one so it just works
+    await loadFree(true);
+    if (S.agents.some((x) => x.id === "builtin")) pickSelect($("#agent"), "builtin");
+    const f = [...$("#model").options].find((o) => o.parentNode?.label?.startsWith("Free"));
+    if (f) { pickSelect($("#model"), f.value); return toast(`Ready: ${f.textContent} (free) on the Built-in agent`); }
+  }
+  toast("Saved — pick it in the model menu");
 });
 
 // web app

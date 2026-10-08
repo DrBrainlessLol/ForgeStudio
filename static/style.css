@@ -1339,3 +1339,9 @@ html[data-density="compact"] .show-side { height: 24px; padding: 0 8px; }
 .tb-proj .chev { width: 11px; height: 11px; opacity: .7; }
 /* "New task": its shortcut (Alt N) always shown, as a quiet hint */
 .side-new kbd { border: 0; background: var(--hover); color: var(--dim); font-size: 10.5px; padding: 1px 6px; }
+
+/* engine picker: free models callout */
+.pop-free { display: flex; align-items: center; gap: 9px; margin: 2px 4px 6px; padding: 8px 9px; border-radius: 10px; background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.pop-free > .ic { width: 15px; height: 15px; color: var(--ok); flex: none; }
+.pop-free > span { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.pop-free small { color: var(--dim); font-size: .9em; }
