@@ -958,7 +958,7 @@ kbd { display: inline-block; min-width: 20px; padding: 1px 6px; border-radius: 5
             radial-gradient(900px 600px at 100% 105%, rgba(52, 211, 153, 0.16), transparent 60%),
             radial-gradient(800px 600px at -5% 105%, rgba(251, 191, 36, 0.18), transparent 60%);
 }
-:root { --r: 9px; --r-lg: 16px; --island-r: 16px; --brand: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, #fff), color-mix(in srgb, var(--accent) 70%, #22d3ee)); }
+:root { --r: 9px; --r-lg: 16px; --island-r: 16px; --brand: var(--accent); }
 
 body { background: var(--canvas); }
 body::before { content: ""; position: fixed; inset: 0; background: var(--aurora); pointer-events: none; z-index: 0; }
@@ -966,7 +966,7 @@ body::before { content: ""; position: fixed; inset: 0; background: var(--aurora)
 
 /* ---- controls: softer, rounder ---- */
 .btn, .icon-btn, select { border-radius: var(--r); box-shadow: none; }
-.btn.primary { background: var(--brand); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 30%, transparent); }
+.btn.primary { background: var(--accent); box-shadow: none; }
 .btn.primary:hover { filter: brightness(1.08); }
 input:not([type=checkbox]):not([type=file]), textarea { border-radius: var(--r); }
 .segmented { border-radius: 999px; background: var(--hover); border-color: transparent; padding: 3px; }
@@ -977,7 +977,7 @@ input:not([type=checkbox]):not([type=file]), textarea { border-radius: var(--r);
 /* ---- title bar: part of the canvas ---- */
 .titlebar { height: 48px; background: transparent; backdrop-filter: none; border-bottom: 0; padding: 0 12px; }
 .tb-title { font-weight: 650; letter-spacing: -.01em; }
-.tb-title img { width: 22px; height: 22px; filter: drop-shadow(0 2px 8px color-mix(in srgb, var(--accent) 45%, transparent)); }
+.tb-title img { width: 22px; height: 22px; }
 .tb-proj { height: 30px; border-radius: 999px; padding: 0 12px; background: color-mix(in srgb, var(--bg) 60%, transparent); border: 0.5px solid var(--line); }
 .modes { border-radius: 999px; padding: 3px; background: color-mix(in srgb, var(--bg) 55%, transparent); border: 0.5px solid var(--line); backdrop-filter: blur(12px); }
 .modes button { border-radius: 999px; height: 28px; padding: 0 16px; }
@@ -1301,3 +1301,17 @@ dialog { border-radius: 18px; box-shadow: var(--pop-shadow); }
 .term-host { flex: 1; min-height: 0; padding: 8px 4px 6px 10px; }
 .term-host .xterm { height: 100%; }
 .term-host .xterm-viewport { background: transparent !important; }
+
+/* plain, flat buttons: no gradients or glows anywhere */
+.btn.primary, .btn.primary:hover { background: var(--accent); background-image: none; box-shadow: none; filter: none; }
+.btn.primary:hover { opacity: .9; }
+.btn.primary:disabled { opacity: .45; }
+/* Android / Flutter tabs stay on one line when the docked chat makes the pane narrow; they scroll if they must */
+.droid-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.droid-tabs::-webkit-scrollbar { display: none; }
+.droid-tabs button { white-space: nowrap; flex: none; }
+.droid-tabs #androidInfo { flex: 1 1 0; min-width: 0; text-align: right; }
+.run-bar { overflow-x: auto; scrollbar-width: none; }
+.run-bar::-webkit-scrollbar { display: none; }
+.run-bar > * { flex-shrink: 0; }
+.run-bar #deviceSel { flex-shrink: 1; min-width: 120px; }
