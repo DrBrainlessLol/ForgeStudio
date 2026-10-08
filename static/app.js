@@ -622,8 +622,10 @@ function refreshTyping() {
   // shows itself; the status line only fills the quiet gaps between steps, so it never repeats the item above it
   const it = currentStep(chatId());
   const quiet = Date.now() - (S.lastEv || 0) > 1500;
+  const box = $("#messages"), atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 140, was = t.hidden;
   t.hidden = (it && it.k !== "text") || !quiet;
   if (!t.hidden && !t.firstChild) t.innerHTML = '<span class="typing-spin"></span><span class="typing-label">Working…</span>';
+  if (was && !t.hidden && atBottom) box.scrollTop = box.scrollHeight;  // it appears late: keep it in view, not under the message box
 }
 async function openChat(cid) {
   if (!S.cur) return;
