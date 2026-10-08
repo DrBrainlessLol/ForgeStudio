@@ -1323,3 +1323,19 @@ dialog { border-radius: 18px; box-shadow: var(--pop-shadow); }
 .show-side .ic { width: 14px; height: 14px; color: var(--accent); }
 .show-side:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 [data-density="compact"] .show-side { height: 24px; padding: 0 8px; }
+
+/* ---- quieter chrome: one flat "selected" look for every switch, no rings or glows ---- */
+.segmented, .style-seg, .modes { background: var(--hover); border: 0; box-shadow: none; backdrop-filter: none; }
+.segmented button.active, .style-seg button.active, .modes button.active,
+[data-theme="light"] .segmented button.active, [data-theme="light"] .modes button.active {
+  background: var(--control-active); color: var(--text); box-shadow: none; }
+[data-theme="light"] .segmented button.active, [data-theme="light"] .style-seg button.active, [data-theme="light"] .modes button.active { background: #fff; box-shadow: 0 1px 2px rgba(15, 23, 42, .08); }
+.style-seg button.active[data-style="plan"], .style-seg button.active[data-style="chat"] { color: var(--text); }
+.modes button.active .ic { color: var(--text); }
+/* project switcher in the title bar: plain text that highlights on hover, like the other title-bar buttons */
+.tb-proj { background: transparent; border: 0; padding: 0 8px; border-radius: 8px; font-weight: 600; gap: 7px; }
+.tb-proj:hover { background: var(--hover); }
+.tb-proj .ic { color: var(--dim); }
+.tb-proj .chev { width: 11px; height: 11px; opacity: .7; }
+/* "New task": its shortcut (Alt N) always shown, as a quiet hint */
+.side-new kbd { border: 0; background: var(--hover); color: var(--dim); font-size: 10.5px; padding: 1px 6px; }
