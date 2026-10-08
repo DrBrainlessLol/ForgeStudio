@@ -2240,7 +2240,7 @@ const SHORTCUTS = [
     ["Ctrl+O", "Switch project"], ["Ctrl+,", "Settings"], ["F1 or ?", "This list"]]],
   ["Chat", [["Enter / Shift+Enter", "Send / new line"], ["Ctrl+L", "Focus the message box"], ["Shift+Tab", "Cycle Agent → Plan → Chat"],
     ["Alt+N", "New chat"], ["Ctrl+Shift+H", "Chat history"], ["Ctrl+Shift+⌫", "Stop the agent"]]],
-  ["Editor", [["Ctrl+P", "Go to file"], ["Ctrl+Shift+F", "Search in files"], ["Ctrl+Shift+E / G", "Explorer / Source control"],
+  ["Editor", [["Ctrl+P", "Go to file"], ["Ctrl+Shift+F", "Search in files"], ["Ctrl+Shift+E / G", "Files / Git (also reopens a hidden file panel)"],
     ["Ctrl+S", "Save"], ["Ctrl+G", "Go to line"], ["Ctrl+/", "Toggle comment"], ["Tab / Shift+Tab", "Indent / outdent"]]],
 ];
 function showShortcuts() {

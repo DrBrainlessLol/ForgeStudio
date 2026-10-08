@@ -56,6 +56,7 @@ function gitClass(f) {
 
 // ============================================================ views & layout
 function setView(v) {
+  if ($("#codeWrap").classList.contains("side-hidden")) showSide(true);  // Ctrl+Shift+E/F/G bring the panel back too
   C.view = v;
   $$(".code-rail button[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
   $$('.code-view').forEach((s) => (s.hidden = s.dataset.view !== v));

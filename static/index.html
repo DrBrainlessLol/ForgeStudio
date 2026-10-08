@@ -111,7 +111,7 @@
             <button data-view="search" title="Search in files (Ctrl+Shift+F)"><svg class="ic"><use href="#i-search"/></svg><span>Search</span></button>
             <button data-view="git" title="Source control (Ctrl+Shift+G)"><svg class="ic"><use href="#i-branch"/></svg><span>Git</span><span class="rail-badge" id="gitBadge" hidden></span></button>
             <div class="spacer"></div>
-            <button id="btnCodeSide" title="Hide file panel"><svg class="ic"><use href="#i-sidebar"/></svg></button>
+            <button id="btnCodeSide" title="Hide the file panel (bring it back with the Files button or Ctrl+Shift+E)" aria-label="Hide file panel"><svg class="ic"><use href="#i-sidebar"/></svg></button>
           </nav>
           <section class="code-view" data-view="files">
             <div class="cv-head"><span id="treeTitle">Explorer</span><div class="spacer"></div>
@@ -143,8 +143,8 @@
         <div class="code-resizer" id="codeResizer"></div>
         <div class="editor-col">
           <div class="ed-tabs-row">
+            <button class="show-side" id="btnShowSide" title="Show the file panel: files, search and Git (Ctrl+Shift+E)" hidden><svg class="ic"><use href="#i-files"/></svg><span>Files</span></button>
             <div class="ed-tabs" id="edTabs"></div>
-            <button class="icon-btn" id="btnShowSide" title="Show file panel" hidden><svg class="ic"><use href="#i-sidebar"/></svg></button>
             <button class="btn small plain" id="btnEdAsk" title="Send the file or selection to the agent"><svg class="ic"><use href="#i-bot"/></svg> Ask agent</button>
             <button class="icon-btn" id="btnEdSave" title="Save (Ctrl+S)"><svg class="ic"><use href="#i-save"/></svg></button>
           </div>

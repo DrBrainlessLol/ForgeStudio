@@ -1315,3 +1315,11 @@ dialog { border-radius: 18px; box-shadow: var(--pop-shadow); }
 .run-bar::-webkit-scrollbar { display: none; }
 .run-bar > * { flex-shrink: 0; }
 .run-bar #deviceSel { flex-shrink: 1; min-width: 120px; }
+
+/* the file panel's way back: a labelled button at the start of the editor tabs, not a tiny icon after them */
+.show-side { align-self: center; flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; margin: 0 6px 0 2px; padding: 0 10px;
+  border: 0.5px solid var(--line-strong); border-radius: 8px; background: var(--control); color: var(--text); font-weight: 500; cursor: default; }
+.show-side:hover { background: var(--control-hover); }
+.show-side .ic { width: 14px; height: 14px; color: var(--accent); }
+.show-side:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+[data-density="compact"] .show-side { height: 24px; padding: 0 8px; }
