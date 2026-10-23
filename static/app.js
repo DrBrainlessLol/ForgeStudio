@@ -923,17 +923,37 @@ function renderAttachments() {
     box.append(d);
   });
 }
+// Big screenshots (pasted PNGs are often 5–20 MB) are scaled to at most 2000 px and re-encoded before upload: much less
+// disk space, quicker to send, and under the 5 MB the agent accepts as an image. Kept as is when that isn't smaller.
+async function shrinkImage(f) {
+  if (!/^image\/(png|jpeg|webp|bmp)$/.test(f.type) || f.size < 1.5e6) return f;
+  try {
+    const img = await createImageBitmap(f), k = Math.min(1, 2000 / Math.max(img.width, img.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); img.close?.();
+    let type = "image/webp", blob = await new Promise((r) => c.toBlob(r, type, 0.9));
+    if (!blob || blob.type !== type) { type = "image/jpeg"; blob = await new Promise((r) => c.toBlob(r, type, 0.9)); }
+    if (!blob || blob.size >= f.size) return f;
+    return new File([blob], (f.name || "pasted").replace(/\.[^.]*$/, "") + (type === "image/webp" ? ".webp" : ".jpg"), { type });
+  } catch { return f; }
+}
 async function addFiles(list) {
-  for (const f of list) {
+  for (let f of list) {
+    f = await shrinkImage(f);
     if (f.size > 100 * 1024 * 1024) { toast(`${f.name} is larger than 100 MB`, true); continue; }
     const a = { name: f.name || "pasted.png", uploading: true, preview: f.type.startsWith("image/") ? URL.createObjectURL(f) : null };
     S.attachments.push(a); renderAttachments();
     try {
       const r = await fetch(`/api/upload?name=${encodeURIComponent(a.name)}`, { method: "POST", headers: { "X-Token": TOKEN, "X-Login": LOGIN }, body: f });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({ error: `the server answered HTTP ${r.status}` }));
       if (!r.ok) throw new Error(d.error);
       Object.assign(a, d, { uploading: false });
-    } catch (e) { S.attachments.splice(S.attachments.indexOf(a), 1); toast(`Upload failed: ${e.message}`, true); }
+    } catch (e) {
+      S.attachments.splice(S.attachments.indexOf(a), 1);
+      if (a.preview) URL.revokeObjectURL(a.preview);
+      toast(e instanceof TypeError ? "Upload failed: lost the connection to Forge Studio. Is the disk full?" : `Upload failed: ${e.message}`, true);
+    }
     renderAttachments();
   }
 }

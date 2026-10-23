@@ -62,10 +62,32 @@ def write_json(path: Path, data, private=False):
     with _io_lock:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2))
-        if private:
-            tmp.chmod(0o600)
-        tmp.replace(path)
+        try:
+            tmp.write_text(json.dumps(data, indent=2))
+            if private:
+                tmp.chmod(0o600)
+            tmp.replace(path)
+        except OSError:  # disk full: keep the old file, don't leave a half-written copy taking space
+            tmp.unlink(missing_ok=True)
+            raise
+
+
+DISK_FULL = "Your disk is full"
+
+
+def disk_free(path):
+    """Free bytes on the disk holding `path` (or its nearest existing parent); None if unknown."""
+    p = Path(path)
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    try:
+        return shutil.disk_usage(p).free
+    except OSError:
+        return None
+
+
+def mb(n):
+    return f"{n / 1e6:,.0f} MB" if n >= 1e6 else f"{n / 1e3:,.0f} KB"
 
 
 CONFIG = read_json(CONFIG_FILE, {})
@@ -153,17 +175,35 @@ class Profile:
         return cls._cache[pid]
 
     def save(self):
-        write_json(self.file, self.data, private=True)
+        """Persist the profile. On a full disk the state stays in memory (the old file is kept) and is saved next time."""
+        try:
+            write_json(self.file, self.data, private=True)
+            return True
+        except OSError:
+            return False
 
     def chat_log(self, cid):
         return self.dir / "chats" / f"{cid}.jsonl"
 
     def append(self, cid, ev):
+        """Add an event to the chat log. Returns False when it couldn't be written (disk full), never raises: a failed
+        write mustn't kill the agent's run halfway, which left the chat stuck on Working…"""
+        line = (json.dumps(ev) + "\n").encode()
         with _io_lock:
             f = self.chat_log(cid)
-            f.parent.mkdir(parents=True, exist_ok=True)
-            with f.open("a") as fh:
-                fh.write(json.dumps(ev) + "\n")
+            try:
+                f.parent.mkdir(parents=True, exist_ok=True)
+                with f.open("ab") as fh:
+                    start = fh.tell()
+                    try:
+                        fh.write(line)
+                        fh.flush()
+                    except OSError:
+                        fh.truncate(start)  # no half-written line that would break loading the chat
+                        raise
+                return True
+            except OSError:
+                return False
 
     def provider(self, prov_id):
         return next((p for p in self.data["providers"] if p["id"] == prov_id), None)
@@ -867,6 +907,7 @@ class Run:
         self.text_buf = {"text": "", "sub": False}
         self.think_buf = {"text": "", "sub": False, "t0": None}
         self.handoff, self.advisor, self.adv_model = "", None, None  # set by start_chat / run_builtin
+        self.disk_warned = False
 
     def agent_prompt(self):
         """What the agent is sent: the user's message, after the earlier conversation when the chat changed agent."""
@@ -876,11 +917,19 @@ class Run:
     def send(self, ev, log=True):
         emit({"type": "chat", "chat": self.cid, "project": self.project, "event": ev}, profile=self.prof.pid)
         if log:
-            self.prof.append(self.cid, ev)
+            self.log(ev)
+
+    def log(self, ev):
+        """Save an event to the chat history; on a full disk, say so once instead of failing the run."""
+        if not self.prof.append(self.cid, ev) and not self.disk_warned:
+            self.disk_warned = True
+            emit({"type": "chat", "chat": self.cid, "project": self.project, "event": {"type": "ui_raw", "err": True, "text":
+                  f"{DISK_FULL}: this reply can't be saved to the chat history. Free up some space, then reopen the chat."}},
+                 profile=self.prof.pid)
 
     def flush(self):
         if self.text_buf["text"]:
-            self.prof.append(self.cid, {"type": "text", "text": self.text_buf["text"], "sub": self.text_buf["sub"]})
+            self.log({"type": "text", "text": self.text_buf["text"], "sub": self.text_buf["sub"]})
             self.text_buf["text"] = ""
 
     def outputs_note(self):
@@ -898,7 +947,7 @@ class Run:
         if tb["t0"] is not None:
             ms = int((time.time() - tb["t0"]) * 1000)
             if tb["text"].strip():
-                self.prof.append(self.cid, {"type": "thinking", "text": tb["text"], "sub": tb["sub"], "ms": ms})
+                self.log({"type": "thinking", "text": tb["text"], "sub": tb["sub"], "ms": ms})
             self.send({"type": "think_end", "ms": ms, "sub": tb["sub"]}, log=False)
         tb.update(text="", t0=None)
 
@@ -1568,18 +1617,27 @@ def advisor_for(model, advisor):
     return advisor if allowed is None or advisor in allowed else None
 
 
-def chat_transcript(prof, cid, limit=60_000):
-    """The visible conversation so far as plain text, to hand a chat over to another agent or API style."""
-    parts = []
+def read_jsonl(f):
+    """Events from a chat log, skipping any damaged line (e.g. cut short when the disk filled up)."""
     try:
-        lines = prof.chat_log(cid).read_text(errors="replace").splitlines()
+        lines = f.read_text(errors="replace").splitlines()
     except OSError:
-        return ""
+        return []
+    out = []
     for line in lines:
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if isinstance(ev, dict):
+            out.append(ev)
+    return out
+
+
+def chat_transcript(prof, cid, limit=60_000):
+    """The visible conversation so far as plain text, to hand a chat over to another agent or API style."""
+    parts = []
+    for ev in read_jsonl(prof.chat_log(cid)):
         text = (ev.get("text") or "").strip()
         if not text or ev.get("sub"):
             continue
@@ -3258,12 +3316,24 @@ def setup_install(item):
 # ---------------------------------------------------------------- files, uploads, LAN access
 
 
+UPLOAD_HEADROOM = 50_000_000  # leave this much free so chats, state and the agent itself can still write
+
+
 def save_upload(prof, name, data):
     name = re.sub(r"[^\w.\- ()]+", "_", Path(name).name)[:120] or "file"
+    free = disk_free(prof.dir)
+    if free is not None and free < len(data) + UPLOAD_HEADROOM:
+        raise ValueError(f"{DISK_FULL} ({mb(free)} free), so {name} ({mb(len(data))}) can't be attached. "
+                         "Free up some space and try again.")
     d = prof.dir / "uploads" / uuid.uuid4().hex[:10]
-    d.mkdir(parents=True, exist_ok=True)
     f = d / name
-    f.write_bytes(data)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(data)
+    except OSError as e:
+        shutil.rmtree(d, ignore_errors=True)  # don't keep a half-written file using up what space is left
+        raise ValueError(f"{DISK_FULL}, so {name} can't be attached. Free up some space and try again." if e.errno == 28
+                         else f"Couldn't save {name}: {e.strerror or e}")
     kind = "image" if f.suffix.lower() in IMAGE_TYPES else "file"
     return {"name": name, "path": str(f), "size": len(data), "kind": kind,
             "mime": mimetypes.guess_type(name)[0] or "application/octet-stream"}
@@ -3940,7 +4010,7 @@ class Handler(BaseHTTPRequestHandler):
                 if cid not in prof.data["chats"]:
                     return self._send(404, {"error": "chat not found"})
                 f = prof.chat_log(cid)
-                events = [trim_event(json.loads(l)) for l in f.read_text().splitlines() if l.strip()] if f.exists() else []
+                events = [trim_event(e) for e in read_jsonl(f)]
                 pend = [{"type": "approval", "id": k, "tool": v["tool"], "input": v["input"], "hints": risk_hints(v["tool"], v["input"], prof.data["chats"][cid]["project"])}
                         for k, v in APPROVALS.items() if v["chat"] == cid]
                 return self._send(200, {"chat": prof.data["chats"][cid], "events": events, "pending": pend,
@@ -4069,7 +4139,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, {"error": "login required", "login": True})
             if n > 100 * 1024 * 1024:
                 return self._send(413, {"error": "File is larger than 100 MB"})
-            return self._send(200, save_upload(Profile.get(pid), parse_qs(u.query).get("name", ["file"])[0], self.rfile.read(n)))
+            data = self.rfile.read(n)  # read it all first, so the browser always gets an answer rather than a reset
+            try:
+                return self._send(200, save_upload(Profile.get(pid), parse_qs(u.query).get("name", ["file"])[0], data))
+            except ValueError as e:
+                return self._send(507, {"error": str(e)})
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
         except json.JSONDecodeError:
