@@ -24,7 +24,7 @@ It uses only the Python standard library and plain HTML/CSS/JS with no build ste
     <td><img src="docs/media/04-editor-with-agent.png" alt="Editor with the file tree, a Kotlin file and the agent docked on the right"><br><sub><b>Editor</b>: files, search and Git with the agent beside you</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/media/03-model-and-reasoning-picker.png" alt="One picker for agent, model, reasoning effort and fast mode"><br><sub>One picker for agent, model, reasoning and fast mode</sub></td>
+    <td><img src="docs/media/03-model-and-reasoning-picker.png" alt="One picker for agent, model, reasoning effort and fast mode"><br><sub>One picker for agent, model, advisor, reasoning and fast mode</sub></td>
     <td><img src="docs/media/05-git-diff.png" alt="Source control with changed files and a side-by-side diff"><br><sub>Review every change in the Git panel</sub></td>
   </tr>
   <tr>
@@ -165,6 +165,8 @@ See `packaging/README.md` for details.
 ## Composer
 - **Agent / Plan / Chat** (Shift+Tab cycles): Plan researches and proposes without editing, then offers **Build this plan**; Chat answers with no tools at all.
 - **Reasoning** (Low … Max) and **Fast mode** for Claude Code, remembered per profile.
+- **Advisor:** a stronger model the working model consults for a plan, when it's stuck and before it calls a hard task done. By default **Sonnet 5.5 does the work and Opus 5.5 advises**; pick any advisor (or Off) in the engine picker. Works with Claude Code (your login or an Anthropic key) and the Built-in agent with an Anthropic key. The advisor must be at least as capable as the working model; the picker says when a pair won't work.
+- **Switch models or agents mid-chat:** pick any model, provider or agent in the engine picker and keep going in the same conversation. When the agent changes, the new one gets the conversation so far with your next message.
 - Phased work gets **Move to Phase N** / **Move to next phase** buttons when a reply finishes a phase.
 - Files the agent makes for you (zip, PDF, Word, Markdown, images…) appear as **File ready** cards; folders in the explorer can be downloaded as a ZIP.
 - Keyboard shortcuts: press **F1** or **?** for the list.

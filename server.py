@@ -866,6 +866,11 @@ class Run:
         self.opts = {"effort": None, "fast": False, "style": "agent"}
         self.text_buf = {"text": "", "sub": False}
         self.think_buf = {"text": "", "sub": False, "t0": None}
+        self.handoff, self.advisor, self.adv_model = "", None, None  # set by start_chat / run_builtin
+
+    def agent_prompt(self):
+        """What the agent is sent: the user's message, after the earlier conversation when the chat changed agent."""
+        return self.handoff + self.prompt
 
     # -- plumbing
     def send(self, ev, log=True):
@@ -1046,12 +1051,16 @@ class Run:
             cmd += ["--plugin-dir", p["path"]]
         if self.model:
             cmd += ["--model", self.model]
+        # the advisor is an Anthropic server tool: only with Claude itself (this computer's login or an Anthropic key)
+        adv = advisor_for(self.model, self.advisor) if style != "chat" and (not self.prov or self.prov["type"] == "anthropic") else None
+        if adv and claude_supports(exe, "--advisor"):
+            cmd += ["--advisor", adv]
         if self.chat.get("session"):
             cmd += ["--resume", self.chat["session"]]
         if self.files:
             cmd += ["--add-dir", str(self.prof.dir / "uploads")]
         err_lines = self.spawn(cmd, provider_env(self.prov))
-        content = [{"type": "text", "text": self.prompt + attachment_note(self.files)}]
+        content = [{"type": "text", "text": self.agent_prompt() + attachment_note(self.files)}]
         for f in self.files:
             mt = IMAGE_TYPES.get(Path(f["path"]).suffix.lower())
             if f["kind"] == "image" and mt and Path(f["path"]).stat().st_size < 5_000_000:
@@ -1151,7 +1160,7 @@ class Run:
         for f in self.files:
             if f["kind"] == "image":
                 flags += ["-i", f["path"]]
-        prompt = self.prompt + attachment_note(self.files)
+        prompt = self.agent_prompt() + attachment_note(self.files)
         base = [shutil.which("codex", path=tool_env()["PATH"]), "exec"]
         cmd = base + flags + (["resume", self.chat["session"]] if self.chat.get("session") else ["-C", self.project]) + ["--", prompt]
         err_lines = self.spawn(cmd, tool_env(), stdin=subprocess.DEVNULL)
@@ -1198,7 +1207,7 @@ class Run:
 
     # -- any other CLI: command template, plain text output
     def run_generic(self):
-        prompt = self.prompt + attachment_note(self.files)
+        prompt = self.agent_prompt() + attachment_note(self.files)
         cmd = [prompt if part == "{prompt}" else part.replace("{prompt}", prompt) for part in shlex.split(self.agent["template"])]
         if "{prompt}" not in self.agent["template"]:
             cmd.append(prompt)
@@ -1289,8 +1298,6 @@ class Run:
             return 1, "Pick a model provider (your own API key) in the model menu — the built-in engine needs one."
         prov = self.prov
         wire = "openai" if prov.get("api") == "openai" else "anthropic"
-        if self.chat.get("wire") and self.chat["wire"] != wire:
-            return 1, "This chat was started with a different kind of provider. Start a new chat to switch."
         self.chat["wire"] = wire
         base = "https://api.anthropic.com" if prov["type"] == "anthropic" else prov["baseUrl"].rstrip("/")
         key = prov.get("apiKey") or ""
@@ -1303,6 +1310,9 @@ class Run:
             url = base + "/v1/messages"
             headers = {"content-type": "application/json", "anthropic-version": "2023-06-01",
                        "x-api-key": key, "authorization": f"Bearer {key}"}
+            self.adv_model = advisor_for(model, self.advisor) if prov["type"] == "anthropic" else None
+            if self.adv_model:
+                headers["anthropic-beta"] = "advisor-tool-2026-03-01"
         api_file = self.prof.dir / "chats" / f"{self.cid}.api.json"
         messages = read_json(api_file, [])
         messages.append(self.user_message(wire))
@@ -1316,8 +1326,10 @@ class Run:
                 return 1, more  # `more` carries the error text
             messages.append(assistant)
             write_json(api_file, messages)
-            if not more or not calls or self.stopped:
+            if not more or self.stopped:
                 break
+            if not calls:  # pause_turn: a server tool (the advisor) paused the turn; send it back to continue
+                continue
             tool_msgs = []
             for c in calls:
                 tool, inp = c["name"], c.get("input") or {}
@@ -1343,7 +1355,7 @@ class Run:
         return 0, ""
 
     def user_message(self, wire):
-        text = (plugin_command(self.prompt) or self.prompt) + (attachment_note(self.files) if self.files else "")
+        text = self.handoff + (plugin_command(self.prompt) or self.prompt) + (attachment_note(self.files) if self.files else "")
         imgs = []
         for f in self.files:
             mt = IMAGE_TYPES.get(Path(f["path"]).suffix.lower())
@@ -1380,8 +1392,14 @@ class Run:
                 yield line[5:].strip()
 
     def req_anthropic(self, url, headers, model, messages, totals):
-        body = {"model": model, "max_tokens": 8192, "stream": True, "system": BUILTIN_SYSTEM + plugin_system_note() + self.outputs_note(),
-                "tools": ANTHROPIC_TOOLS, "messages": messages}
+        system, tools = BUILTIN_SYSTEM + plugin_system_note() + self.outputs_note(), ANTHROPIC_TOOLS
+        if self.adv_model:
+            system += "\n\n" + ADVISOR_PROMPT
+            tools = tools + [{"type": "advisor_20260301", "name": "advisor", "model": self.adv_model,
+                              "caching": {"type": "ephemeral", "ttl": "5m"}}]
+        else:  # the API rejects advisor results in the history once the tool is gone (advisor turned off, other model)
+            messages = without_advisor(messages)
+        body = {"model": model, "max_tokens": 8192, "stream": True, "system": system, "tools": tools, "messages": messages}
         resp, err = self._open_stream(url, headers, body)
         if err:
             return None, None, err
@@ -1394,8 +1412,10 @@ class Run:
             t = ev.get("type")
             if t == "content_block_start":
                 cb = ev.get("content_block", {})
-                cur = {"type": cb.get("type"), "id": cb.get("id"), "name": cb.get("name"), "text": "", "json": ""}
+                cur = {"type": cb.get("type"), "id": cb.get("id"), "name": cb.get("name"), "text": "", "json": "", "raw": cb}
                 blocks.append(cur)
+                if cb.get("type") == "advisor_tool_result":
+                    self.show_advice(cb)
             elif t == "content_block_delta":
                 d = ev.get("delta", {})
                 if d.get("type") == "text_delta":
@@ -1421,8 +1441,26 @@ class Run:
                 except json.JSONDecodeError:
                     inp = {}
                 out.append({"type": "tool_use", "id": b["id"], "name": b["name"], "input": inp})
+            elif b["type"] == "server_tool_use":
+                try:
+                    inp = json.loads(b["json"]) if b["json"] else b["raw"].get("input") or {}
+                except json.JSONDecodeError:
+                    inp = {}
+                out.append({"type": "server_tool_use", "id": b["id"], "name": b["name"], "input": inp})
+            elif b["type"] == "advisor_tool_result":
+                out.append(b["raw"])  # replayed as-is (the advice may be encrypted)
         calls = [{"id": b["id"], "name": b["name"], "input": b["input"]} for b in out if b.get("type") == "tool_use"]
-        return {"role": "assistant", "content": out}, calls, stop_reason == "tool_use"
+        return {"role": "assistant", "content": out}, calls, stop_reason in ("tool_use", "pause_turn")
+
+    def show_advice(self, cb):
+        """Show an advisor consultation in the chat like a tool call. Advice from current models is encrypted:
+        it goes straight to the working model, so only plaintext advice can be shown."""
+        c = cb.get("content") or {}
+        text = {"advisor_result": c.get("text"), "advisor_redacted_result": "Advice passed to the working model (encrypted).",
+                "advisor_tool_result_error": f"The advisor couldn't answer ({c.get('error_code')})."}.get(c.get("type"), "")
+        tid = cb.get("tool_use_id") or uuid.uuid4().hex[:10]
+        self.event({"type": "tools", "blocks": [{"id": tid, "name": "Advisor", "input": {"model": self.adv_model}}]})
+        self.event({"type": "tool_results", "results": [{"id": tid, "content": text or "", "error": c.get("type") == "advisor_tool_result_error"}]})
 
     def req_openai(self, url, headers, model, messages, totals):
         body = {"model": model, "max_tokens": 8192, "stream": True, "tools": OPENAI_TOOLS, "tool_choice": "auto",
@@ -1470,6 +1508,25 @@ class Run:
         return assistant, calls, finish == "tool_calls" and bool(calls)
 
 
+ADVISOR_PROMPT = ("You have an `advisor` tool backed by a stronger model that sees this whole conversation. Call it (no input "
+                  "needed) before starting substantial work to get a plan, when you are stuck or about to change approach, and "
+                  "before declaring a hard task done. Skip it for quick, simple requests.")
+
+
+def without_advisor(messages):
+    """The history minus advisor calls and results, for a request that doesn't carry the advisor tool."""
+    out = []
+    for m in messages:
+        if m.get("role") == "assistant" and isinstance(m.get("content"), list):
+            content = [b for b in m["content"] if b.get("type") != "advisor_tool_result"
+                       and not (b.get("type") == "server_tool_use" and b.get("name") == "advisor")]
+            if not content:
+                continue
+            m = dict(m, content=content)
+        out.append(m)
+    return out
+
+
 BUILTIN_SYSTEM = ("You are a coding agent working inside the user's project directory. Use the tools to read, "
                   "write and edit files and run shell commands. Keep replies concise. When you finish, briefly say what you did.")
 _TOOL_DEFS = [
@@ -1486,8 +1543,64 @@ ANTHROPIC_TOOLS = [{"name": n, "description": d, "input_schema": s} for n, d, s 
 OPENAI_TOOLS = [{"type": "function", "function": {"name": n, "description": d, "parameters": s}} for n, d, s in _TOOL_DEFS]
 
 
+# Advisor: a stronger model the working model consults for plans and when stuck (Anthropic's advisor tool; Claude
+# Code's --advisor). The advisor must be at least as capable as the worker; these are the pairs the API accepts.
+DEFAULT_WORKER, DEFAULT_ADVISOR = "claude-sonnet-5-5", "claude-opus-5-5"
+_ADV_TOP = ["claude-mythos-5-1", "claude-fable-5-1", "claude-mythos-5", "claude-fable-5", "claude-opus-5-5", "claude-opus-5"]
+ADVISOR_PAIRS = {
+    **dict.fromkeys(["claude-haiku-4-5", "claude-sonnet-4-6"], _ADV_TOP + ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+                                                                       "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6"]),
+    "claude-sonnet-5": _ADV_TOP + ["claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5-5", "claude-sonnet-5"],
+    "claude-opus-4-6": _ADV_TOP + ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5-5", "claude-sonnet-5"],
+    **dict.fromkeys(["claude-opus-4-7", "claude-opus-4-8"], _ADV_TOP + ["claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5-5"]),
+    **dict.fromkeys(["claude-opus-5-5", "claude-opus-5", "claude-fable-5", "claude-mythos-5"], _ADV_TOP),
+    **dict.fromkeys(["claude-fable-5-1", "claude-mythos-5-1"], ["claude-mythos-5-1", "claude-fable-5-1"]),
+    "claude-sonnet-5-5": _ADV_TOP + ["claude-sonnet-5-5"],
+}
+
+
+def advisor_for(model, advisor):
+    """The advisor to use with this worker model, or None when it's off or the pair isn't allowed. A worker we don't
+    know (the CLI's default, an alias) is passed through and left to Claude Code to judge."""
+    if not advisor:
+        return None
+    allowed = ADVISOR_PAIRS.get(model or "")
+    return advisor if allowed is None or advisor in allowed else None
+
+
+def chat_transcript(prof, cid, limit=60_000):
+    """The visible conversation so far as plain text, to hand a chat over to another agent or API style."""
+    parts = []
+    try:
+        lines = prof.chat_log(cid).read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        text = (ev.get("text") or "").strip()
+        if not text or ev.get("sub"):
+            continue
+        if ev.get("type") == "user":
+            parts.append("User: " + text)
+        elif ev.get("type") == "text":
+            if parts and parts[-1].startswith("Assistant: "):
+                parts[-1] += "\n\n" + text
+            else:
+                parts.append("Assistant: " + text)
+    out = "\n\n".join(parts)
+    return out if len(out) <= limit else "…" + out[-limit:]
+
+
+HANDOFF_NOTE = ("This conversation was started with a different agent or model and continues with you. Here it is so far "
+                "(files on disk already include any changes made); pick up from where it left off.\n"
+                "<previous_conversation>\n{transcript}\n</previous_conversation>\n\n")
+
+
 def start_chat(prof: Profile, project, prompt, chat_id=None, model=None, mode="acceptEdits", provider_id=None,
-               files=None, agent_id="claude", opts=None):
+               files=None, agent_id="claude", opts=None, advisor=None):
     chats = prof.data["chats"]
     if chat_id and chat_id not in chats:
         raise ValueError("That chat no longer exists")
@@ -1496,9 +1609,6 @@ def start_chat(prof: Profile, project, prompt, chat_id=None, model=None, mode="a
     agent = agent_by_id(agent_id or "claude")
     if not agent or not agent["installed"]:
         raise ValueError(f"The {agent['name'] if agent else agent_id} CLI isn't installed")
-    if chat_id and chats[chat_id].get("agent", "claude") != agent["id"]:
-        raise ValueError(f"This chat uses {agent_by_id(chats[chat_id].get('agent', 'claude'))['name']}. "
-                         "Start a new chat to switch agents.")
     prov = None
     if agent["kind"] in ("claude", "builtin") and provider_id and provider_id != "local":
         prov = prof.provider(provider_id)
@@ -1515,10 +1625,20 @@ def start_chat(prof: Profile, project, prompt, chat_id=None, model=None, mode="a
         chats[chat_id] = {"id": chat_id, "project": project, "title": title, "session": None, "created": now,
                           "agent": agent["id"]}
     chat = chats[chat_id]
-    chat.update({"updated": now, "model": model or None, "provider": provider_id or "local"})
+    # Switching agent (or, on the built-in engine, between OpenAI- and Anthropic-style APIs) mid-chat: the new one
+    # can't resume the old session, so it starts fresh with the conversation so far in its first message.
+    wire = ("openai" if (prov or {}).get("api") == "openai" else "anthropic") if agent["kind"] == "builtin" else None
+    handoff = ""
+    if chat.get("agent", "claude") != agent["id"] or (wire and chat.get("wire") and chat["wire"] != wire):
+        transcript = chat_transcript(prof, chat_id)
+        handoff = HANDOFF_NOTE.format(transcript=transcript) if transcript else ""
+        chat.update({"agent": agent["id"], "session": None, "wire": None})
+        (prof.dir / "chats" / f"{chat_id}.api.json").unlink(missing_ok=True)
+    chat.update({"updated": now, "model": model or None, "provider": provider_id or "local", "advisor": advisor or None})
     prof.data["current"][project] = chat_id
     prof.save()
     run = Run(prof, chat, project, prompt, files, agent, model, mode, prov)
+    run.handoff, run.advisor = handoff, advisor or None
     o = opts or {}
     run.opts = {"effort": o.get("effort") if o.get("effort") in ("low", "medium", "high", "xhigh", "max") else None,
                 "fast": bool(o.get("fast")), "style": o.get("style") if o.get("style") in ("agent", "plan", "chat") else "agent"}
@@ -1776,8 +1896,16 @@ def slim_event(ev):
             return {"type": "think_delta", "text": e["delta"].get("thinking", ""), "sub": sub}
         return None
     if t == "assistant":
-        blocks = [{"type": "tool_use", "id": b.get("id"), "name": b.get("name"), "input": b.get("input")}
-                  for b in ev.get("message", {}).get("content", []) if b.get("type") == "tool_use"]
+        content = ev.get("message", {}).get("content", [])
+        advice = [{"id": b.get("tool_use_id"), "content": (b.get("content") or {}).get("text")
+                   or "Advice passed to the working model (encrypted).",
+                   "error": (b.get("content") or {}).get("type") == "advisor_tool_result_error"}
+                  for b in content if b.get("type") == "advisor_tool_result"]
+        if advice:
+            return {"type": "tool_results", "results": advice}
+        blocks = [{"type": "tool_use", "id": b.get("id"), "name": "Advisor" if b.get("type") == "server_tool_use" else b.get("name"),
+                   "input": b.get("input")} for b in content
+                  if b.get("type") == "tool_use" or (b.get("type") == "server_tool_use" and b.get("name") == "advisor")]
         return {"type": "tools", "blocks": blocks, "sub": sub} if blocks else None
     if t == "user":
         content = ev.get("message", {}).get("content")
@@ -3900,6 +4028,7 @@ class Handler(BaseHTTPRequestHandler):
             "recent": sorted(({k: c.get(k) for k in ("id", "title", "project", "agent", "created", "updated")} for c in prof.data["chats"].values()),
                              key=lambda c: c.get("updated") or c.get("created") or 0, reverse=True)[:300],
             "agents": list_agents(),
+            "advisor": {"pairs": ADVISOR_PAIRS, "worker": DEFAULT_WORKER, "default": DEFAULT_ADVISOR},
             "plugins": list_plugins(),
             "ccPlugins": claude_code_plugins(),
             "usage": USAGE,
@@ -4098,7 +4227,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/chat/send":
             cid = start_chat(prof, project, b.get("prompt", ""), b.get("chat"), b.get("model"), b.get("mode"),
                              b.get("provider"), b.get("files"), b.get("agent") or "claude",
-                             {"effort": b.get("effort"), "fast": b.get("fast"), "style": b.get("style")})
+                             {"effort": b.get("effort"), "fast": b.get("fast"), "style": b.get("style")}, b.get("advisor"))
             return {"chat": cid}
         if path == "/api/chat/stop":
             run = RUNS.get(b.get("chat"))

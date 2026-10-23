@@ -697,7 +697,8 @@ function syncComposer() {
   if (/^Default/.test(model)) model = "";
   const effort = !$("#effort").hidden && EFFORT_SHORT[$("#effort").value];
   const fast = !$("#btnFast").hidden && $("#btnFast").classList.contains("on");
-  $("#engineLabel").innerHTML = [esc(ag), model && `<b>${esc(model)}</b>`, effort && esc(effort)].filter(Boolean).join('<i class="sep">·</i>') + (fast ? ` ${ic("zap")}` : "");
+  const adv = advisorChoice();
+  $("#engineLabel").innerHTML = [esc(ag), model && `<b>${esc(model)}</b>`, adv && `advisor ${esc(modelName(adv))}`, effort && esc(effort)].filter(Boolean).join('<i class="sep">·</i>') + (fast ? ` ${ic("zap")}` : "");
   $("#engineChip").classList.toggle("fast", fast);
   const m = $("#mode").value;
   $("#permLabel").textContent = PERM_SHORT[m] || m;
@@ -734,11 +735,16 @@ function openEnginePop() {
     const freeNames = (S.free?.openrouter || []).slice(0, 4).map((m) => m.name.replace(/^[^:]+:\s*/, "")).join(", ") || "gpt-oss, Gemma, Nemotron";
     const freeBox = builtin && orProv ? "" : `<div class="pop-free">${ic("zap")}<span><b>Free models</b><small>${esc(freeNames)}… ${builtin ? "Add a free OpenRouter key to use them." : "They run on the Built-in agent."}</small></span>
       <button class="btn small" data-free>${builtin ? "Set up" : orProv ? "Use" : "Set up"}</button></div>`;
-    const claude = !$("#effort").hidden;
+    const claude = !$("#effort").hidden, advOk = advisorAvailable(), advSet = advisorSetting(), advUsed = advisorChoice();
+    const advNote = !advSet ? "The working model handles everything on its own"
+      : advUsed ? `${modelName(advUsed)} plans and reviews; ${modelName(modelChoice().model) || "the selected model"} does the work`
+      : `${modelName(advSet)} can't advise ${modelName(modelChoice().model)}: pick a stronger advisor or a lighter working model`;
+    const advBox = advOk ? `<div class="pop-h">Advisor</div><div class="pop-seg">${ADVISOR_MODELS.map(([v, t]) => `<button data-advisor="${v}" class="${advSet === v ? "on" : ""}">${t}</button>`).join("")}</div><small class="dim pop-note">${esc(advNote)}</small>` : "";
     const fb = S.tools?.freebuff ? ""
       : `<div class="pop-sep"></div><button class="pop-item dimmed" data-setup="freebuff" title="A free, ad-supported coding agent">${ic("terminal")}<span>Freebuff <small class="dim">· install</small></span></button>`;
     pop.innerHTML = `<div class="pop-cols"><div class="pop-col"><div class="pop-h">Agent</div>${agents}${fb}</div><div class="pop-col models"><div class="pop-h">Model</div>${freeBox}${models}</div></div>`
-      + (claude ? `<div class="pop-foot"><div class="pop-h">Reasoning</div><div class="pop-seg">${[["", "Auto"], ...Object.entries(EFFORT_SHORT)].map(([v, t]) => `<button data-effort="${v}" class="${$("#effort").value === v ? "on" : ""}">${t}</button>`).join("")}</div>
+      + (advOk && !claude ? `<div class="pop-foot">${advBox}</div>` : "")
+      + (claude ? `<div class="pop-foot">${advBox}<div class="pop-h">Reasoning</div><div class="pop-seg">${[["", "Auto"], ...Object.entries(EFFORT_SHORT)].map(([v, t]) => `<button data-effort="${v}" class="${$("#effort").value === v ? "on" : ""}">${t}</button>`).join("")}</div>
         <label class="pop-toggle">${ic("zap")}<span><b>Fast mode</b><small>Quicker answers from the same model (supported models)</small></span><span class="switch"><input type="checkbox" id="popFast" ${$("#btnFast").classList.contains("on") ? "checked" : ""}><i></i></span></label></div>` : "");
     pop.querySelector("[data-setup]")?.addEventListener("click", () => { closePopover(); openSettings("setup"); });
     pop.querySelector("[data-free]")?.addEventListener("click", act(async () => {
@@ -749,6 +755,7 @@ function openEnginePop() {
     }));
     pop.querySelectorAll("[data-agent]").forEach((b) => (b.onclick = () => { pickSelect($("#agent"), b.dataset.agent); openEnginePop(); }));
     pop.querySelectorAll("[data-model]").forEach((b) => (b.onclick = () => { pickSelect($("#model"), b.dataset.model); closePopover(); if (b.dataset.model.endsWith("::__custom")) $("#customModel").focus(); }));
+    pop.querySelectorAll("[data-advisor]").forEach((b) => (b.onclick = () => { store.set(pkey("advisor"), b.dataset.advisor); syncComposer(); openEnginePop(); }));
     pop.querySelectorAll("[data-effort]").forEach((b) => (b.onclick = () => { pickSelect($("#effort"), b.dataset.effort); pop.querySelectorAll("[data-effort]").forEach((x) => x.classList.toggle("on", x === b)); }));
     const fast = pop.querySelector("#popFast");
     if (fast) fast.onchange = () => { if (fast.checked !== $("#btnFast").classList.contains("on")) $("#btnFast").click(); syncComposer(); };
@@ -844,7 +851,7 @@ async function loadFree(force) {
   return S.free;
 }
 function renderModels() {
-  const sel = $("#model"), a = currentAgent(), prev = store.get(pkey("model:" + a?.id), "local::");
+  const sel = $("#model"), a = currentAgent(), prev = store.get(pkey("model:" + a?.id), a?.kind === "claude" ? `local::${S.advisorCfg?.worker || "claude-sonnet-5-5"}` : "local::");
   sel.innerHTML = "";
   const group = (label, prov, models) => {
     const g = document.createElement("optgroup"); g.label = label;
@@ -884,6 +891,23 @@ function modelChoice() {
   let [provider, model] = $("#model").value.split("::");
   if (model === "__custom") { model = $("#customModel").value.trim(); store.set(pkey("customModel"), model); }
   return { provider, model };
+}
+// Advisor: a stronger model the working model consults (Anthropic's advisor tool). Only with Claude itself: Claude Code
+// on this computer's login or an Anthropic key, or the Built-in agent with an Anthropic key.
+const ADVISOR_MODELS = [["", "Off"], ["claude-opus-5-5", "Opus 5.5"], ["claude-fable-5-1", "Fable 5.1"], ["claude-opus-5", "Opus 5"], ["claude-sonnet-5-5", "Sonnet 5.5"]];
+const modelName = (id) => CLAUDE_MODELS.find(([m]) => m === id)?.[1].replace(/ — .*/, "") || id;
+function advisorAvailable() {
+  const kind = currentAgent()?.kind, prov = S.providers.find((p) => p.id === modelChoice().provider);
+  if (kind === "claude") return !prov || prov.type === "anthropic";
+  return kind === "builtin" && prov?.type === "anthropic";
+}
+const advisorSetting = () => store.get(pkey("advisor"), S.advisorCfg?.default ?? "claude-opus-5-5");
+// the advisor that will actually be used: null when off, unavailable here, or not allowed with this worker model
+function advisorChoice() {
+  const adv = advisorSetting();
+  if (!adv || !advisorAvailable()) return null;
+  const allowed = S.advisorCfg?.pairs?.[modelChoice().model || ""];
+  return !allowed || allowed.includes(adv) ? adv : null;
 }
 
 // ============================================================ attachments
@@ -930,7 +954,7 @@ async function send(text) {
   if (cid && S.running[cid]) throw new Error("The agent is still working on this chat");
   const { provider, model } = modelChoice();
   const r = await api("/api/chat/send", { project: p, chat: cid, prompt: text, mode: $("#mode").value, model, provider, files, agent: $("#agent").value,
-    style: $("#style").value, effort: $("#effort").value || null, fast: $("#btnFast").classList.contains("on") });
+    style: $("#style").value, effort: $("#effort").value || null, fast: $("#btnFast").classList.contains("on"), advisor: advisorChoice() });
   S.lastStyle = { ...(S.lastStyle || {}), [r.chat]: $("#style").value };
   $("#nextActions").hidden = true;
   S.loaded[r.chat] = true;
@@ -1102,7 +1126,8 @@ async function loadState() {
   checkUpdated(st);  // first, so it shows even if an old server's answer breaks something below
   Object.assign(S, { profile: st.profile, projects: st.projects, tools: st.tools, previews: st.previews, procs: st.procs,
     providers: st.providers, settings: st.settings, agents: st.agents, plugins: st.plugins || [], prefs: st.prefs || {}, web: st.web,
-    flutter: st.flutter || {}, recent: st.recent || [], usage: st.usage || {}, ccPlugins: st.ccPlugins || [] });
+    flutter: st.flutter || {}, recent: st.recent || [], usage: st.usage || {}, ccPlugins: st.ccPlugins || [],
+    advisorCfg: st.advisor || { pairs: {}, worker: "claude-sonnet-5-5", default: "claude-opus-5-5" } });
   for (const c of S.recent) S.meta[c.id] ??= c;
   for (const [proj, r] of Object.entries(S.flutter)) if (r.device === "web-server") S.previews[proj] = { url: r.url, flutter: true };
   for (const [proj, cid] of Object.entries(st.current)) if (!(proj in S.curChat)) S.curChat[proj] = cid;
@@ -2346,7 +2371,11 @@ $("#chatPane").addEventListener("drop", (e) => { e.preventDefault(); dragDepth =
 $("#btnStop").onclick = act(() => api("/api/chat/stop", { chat: chatId() }));
 $("#btnNew").onclick = act(() => openChat(null));
 $("#btnHistory").onclick = act(() => ($("#historyPanel").hidden ? showHistory() : ($("#historyPanel").hidden = true)));
-$("#agent").onchange = () => { if (chatId() && S.meta[chatId()]?.agent && S.meta[chatId()].agent !== $("#agent").value) { S.curChat[S.cur] = null; renderChat(); toast("Started a new chat for this agent"); } agentChanged(); };
+$("#agent").onchange = () => {
+  const a = currentAgent();
+  if (chatId() && S.meta[chatId()]?.agent && S.meta[chatId()].agent !== a?.id && a?.kind !== "terminal") toast(`${a.name} will continue this chat from your next message`);
+  agentChanged();
+};
 $("#model").onchange = modelChanged;
 $("#customModel").onchange = () => store.set(pkey("customModel"), $("#customModel").value.trim());
 $("#mode").onchange = () => { syncComposer(); if ($("#mode").value === "bypassPermissions") toast("Full access: the agent will run commands and change files without asking."); };
