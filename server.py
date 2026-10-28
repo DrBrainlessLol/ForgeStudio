@@ -1771,7 +1771,7 @@ DELIVERABLE_EXT = {".zip", ".tar", ".gz", ".tgz", ".7z", ".pdf", ".docx", ".doc"
                    ".ogg", ".mp4", ".webm", ".apk", ".aab", ".ipa", ".dmg", ".deb", ".exe", ".msi"}
 
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 USAGE_FILE = CONFIG_DIR / "usage.json"
 USAGE = read_json(USAGE_FILE, {})
 
