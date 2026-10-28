@@ -240,7 +240,7 @@ function openLightbox(src, name) {
 function closeLightbox() { $("#lightbox")?.remove(); }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#lightbox")) { closeLightbox(); e.stopPropagation(); } }, true);
 document.addEventListener("click", (e) => {
-  const t = e.target.closest(".shot-thumb, .msg-files a:has(img), .out-file img, .att img, .msg img");
+  const t = e.target.closest(".shot-thumb, .msg-files a:not(.video-thumb):has(img), .out-file img, .att img, .msg img:not(.video-thumb img)");
   if (!t || e.ctrlKey || e.metaKey || e.button) return;
   const img = t.tagName === "IMG" ? t : t.querySelector("img");
   if (!img) return;
@@ -255,6 +255,8 @@ function renderItem(it) {
       const f = document.createElement("div"); f.className = "msg-files";
       f.innerHTML = it.files.map((x) => x.kind === "image"
         ? `<a href="${fileUrl(x.path)}" target="_blank"><img src="${fileUrl(x.path)}" alt="${esc(x.name)}" loading="lazy" decoding="async"></a>`
+        : x.kind === "video" && x.frames?.length
+        ? `<a class="video-thumb" href="${fileUrl(x.path)}" target="_blank" title="${esc(x.name)} · ${x.frames.length} frames sent to the agent"><img src="${fileUrl(x.frames[0])}" alt="${esc(x.name)}" loading="lazy" decoding="async"><span>${ic("play")}</span></a>`
         : `<a class="file-chip" href="${fileUrl(x.path, true)}">${ic("file")}<span>${esc(x.name)}</span></a>`).join("");
       el.append(f);
     }
@@ -680,7 +682,7 @@ function styleChanged(save = true) {
   $("#mode").disabled = st !== "agent" || currentAgent()?.kind === "generic";
   $("#prompt").placeholder = st === "plan" ? "Describe what you want — the agent researches and proposes a plan, without changing files"
     : st === "chat" ? "Ask anything — chat only, the agent won't run tools or touch files"
-    : "Message the agent — attach images or files with the clip, paste, or drag & drop";
+    : "Message the agent — attach images, videos or files with the clip, paste, or drag & drop";
   if (save) store.set(pkey("style"), st);
 }
 const PERM_SHORT = { ask: "Ask first", acceptEdits: "Auto-edit", auto: "Auto", bypassPermissions: "Full access", plan: "Read-only" };
@@ -918,7 +920,7 @@ function renderAttachments() {
   S.attachments.forEach((a, i) => {
     const d = document.createElement("div");
     d.className = "att" + (a.uploading ? " up" : "");
-    d.innerHTML = `${a.preview ? `<img src="${a.preview}" alt="">` : ic("file")}<span title="${esc(a.name)}">${esc(a.name)}</span><button type="button" title="Remove">${ic("x")}</button>`;
+    d.innerHTML = `${a.preview ? `<img src="${a.preview}" alt="">` : ic("file")}<span title="${esc(a.name)}">${esc(a.name)}${a.kind === "video" && a.frames?.length ? ` <small class="dim">· ${a.frames.length} frames</small>` : ""}</span><button type="button" title="Remove">${ic("x")}</button>`;
     d.querySelector("button").onclick = () => { S.attachments.splice(i, 1); renderAttachments(); };
     box.append(d);
   });
@@ -941,7 +943,7 @@ async function shrinkImage(f) {
 async function addFiles(list) {
   for (let f of list) {
     f = await shrinkImage(f);
-    if (f.size > 100 * 1024 * 1024) { toast(`${f.name} is larger than 100 MB`, true); continue; }
+    if (f.size > 2 * 1024 ** 3) { toast(`${f.name} is larger than 2 GB`, true); continue; }
     const a = { name: f.name || "pasted.png", uploading: true, preview: f.type.startsWith("image/") ? URL.createObjectURL(f) : null };
     S.attachments.push(a); renderAttachments();
     try {
@@ -949,6 +951,12 @@ async function addFiles(list) {
       const d = await r.json().catch(() => ({ error: `the server answered HTTP ${r.status}` }));
       if (!r.ok) throw new Error(d.error);
       Object.assign(a, d, { uploading: false });
+      // a video shows its first frame; the agent gets all the frames the server pulled out of it
+      if (d.kind === "video") {
+        if (a.preview) URL.revokeObjectURL(a.preview);
+        a.preview = d.frames?.length ? fileUrl(d.frames[0]) : null;
+        if (!d.frames?.length) toast(`Couldn't take frames from ${d.name}: the video can't be read, or ffmpeg isn't installed`, true);
+      }
     } catch (e) {
       S.attachments.splice(S.attachments.indexOf(a), 1);
       if (a.preview) URL.revokeObjectURL(a.preview);
@@ -967,7 +975,7 @@ function showAgent() {
 async function send(text) {
   showAgent();
   text = (text ?? $("#prompt").value).trim();
-  const files = S.attachments.filter((a) => !a.uploading).map(({ name, path, size, kind, mime }) => ({ name, path, size, kind, mime }));
+  const files = S.attachments.filter((a) => !a.uploading).map(({ name, path, size, kind, mime, duration, frames }) => ({ name, path, size, kind, mime, duration, frames }));
   if ((!text && !files.length) || !S.cur) return;
   if (S.attachments.some((a) => a.uploading)) throw new Error("Wait for the attachments to finish uploading");
   const p = S.cur, cid = chatId();

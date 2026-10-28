@@ -42,6 +42,7 @@ Section: devel
 Priority: optional
 Architecture: all
 Depends: python3 (>= 3.8), curl
+Recommends: ffmpeg
 Suggests: chromium | google-chrome-stable, adb, default-jre, nodejs, npm, scrcpy, git
 Installed-Size: $INSTALLED_KB
 Maintainer: Forge Studio <forge@localhost>

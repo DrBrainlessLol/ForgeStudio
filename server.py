@@ -883,12 +883,42 @@ def provider_env(prov):
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
 
 
+VIDEO_TYPES = {".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".wmv", ".flv", ".mpg", ".mpeg", ".3gp", ".ts", ".ogv"}
+
+
+def video_frames(f):
+    """Frames pulled from an attached video (or animated GIF) at upload time, as image attachments, oldest first."""
+    d = Path(f["path"]).parent / "frames"
+    times = read_json(d / "times.json", [])
+    return [{"name": f"{f['name']} @ {clock(t)}", "path": str(p), "kind": "image", "mime": "image/jpeg"}
+            for p, t in zip(sorted(d.glob("*.jpg")), times)]
+
+
+def with_frames(files):
+    """The attachments an agent looks at: images as they are, and each video as its frames."""
+    out = []
+    for f in files:
+        out += video_frames(f) if f["kind"] == "video" else [f]
+    return out
+
+
 def attachment_note(files):
     others = [f for f in files if f["kind"] != "image"]
     if not others:
         return ""
-    lines = "\n".join(f"- {f['name']}: {f['path']}" for f in others)
-    return f"\n\nAttached files (read them from these paths):\n{lines}"
+    lines = []
+    for f in others:
+        frames = video_frames(f) if f["kind"] == "video" else []
+        if f["kind"] != "video":
+            lines.append(f"- {f['name']}: {f['path']}")
+        elif frames:
+            lines.append(f"- {f['name']} (video, {clock(f.get('duration') or 0)} long): {f['path']}. {len(frames)} frames "
+                         f"from it, at {', '.join(x['name'].rsplit(' @ ', 1)[1] for x in frames)}, are attached as images "
+                         f"in that order and saved in {Path(frames[0]['path']).parent}. Treat it as a mockup or screen "
+                         "recording to build from; for a closer look at a moment, extract more frames with ffmpeg.")
+        else:
+            lines.append(f"- {f['name']} (video; no frames could be extracted, use ffmpeg to look at it): {f['path']}")
+    return "\n\nAttached files (read them from these paths):\n" + "\n".join(lines)
 
 
 class Run:
@@ -1110,7 +1140,7 @@ class Run:
             cmd += ["--add-dir", str(self.prof.dir / "uploads")]
         err_lines = self.spawn(cmd, provider_env(self.prov))
         content = [{"type": "text", "text": self.agent_prompt() + attachment_note(self.files)}]
-        for f in self.files:
+        for f in with_frames(self.files):
             mt = IMAGE_TYPES.get(Path(f["path"]).suffix.lower())
             if f["kind"] == "image" and mt and Path(f["path"]).stat().st_size < 5_000_000:
                 content.append({"type": "image", "source": {"type": "base64", "media_type": mt,
@@ -1206,7 +1236,7 @@ class Run:
             flags += ["-m", self.model]
         flags += {"plan": ["-s", "read-only"], "bypassPermissions": ["--dangerously-bypass-approvals-and-sandbox"]}.get(
             self.mode, ["-s", "workspace-write"])
-        for f in self.files:
+        for f in with_frames(self.files):
             if f["kind"] == "image":
                 flags += ["-i", f["path"]]
         prompt = self.agent_prompt() + attachment_note(self.files)
@@ -1406,7 +1436,7 @@ class Run:
     def user_message(self, wire):
         text = self.handoff + (plugin_command(self.prompt) or self.prompt) + (attachment_note(self.files) if self.files else "")
         imgs = []
-        for f in self.files:
+        for f in with_frames(self.files):
             mt = IMAGE_TYPES.get(Path(f["path"]).suffix.lower())
             if f["kind"] == "image" and mt and Path(f["path"]).stat().st_size < 5_000_000:
                 b64 = base64.b64encode(Path(f["path"]).read_bytes()).decode()
@@ -3319,24 +3349,82 @@ def setup_install(item):
 UPLOAD_HEADROOM = 50_000_000  # leave this much free so chats, state and the agent itself can still write
 
 
-def save_upload(prof, name, data):
+MAX_UPLOAD = 2 * 1024 ** 3  # videos can be big; uploads stream to disk, so this only bounds disk use
+
+
+def clock(t):
+    t = int(t)
+    return f"{t // 60}:{t % 60:02d}"
+
+
+def probe_duration(f):
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(f)],
+                             capture_output=True, text=True, timeout=30).stdout.strip()
+        return float(out)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
+
+
+def extract_frames(f, duration):
+    """Evenly spaced frames (one every ~2 s, 4 to 12 of them, at most 1280 px wide) into frames/ beside the video."""
+    d = f.parent / "frames"
+    d.mkdir(exist_ok=True)
+    n = max(4, min(12, round(duration / 2))) if duration >= 1 else 1
+    times = []
+    for i in range(n):
+        t = duration * (i + 0.5) / n
+        out = d / f"frame-{i + 1:02d}.jpg"
+        try:
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{t:.2f}", "-i", str(f), "-frames:v", "1",
+                            "-vf", "scale='min(1280,iw)':-2", "-q:v", "4", str(out)],
+                           capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            break
+        if out.is_file() and out.stat().st_size:
+            times.append(t)
+    write_json(d / "times.json", times)
+    return len(times)
+
+
+def save_upload(prof, name, src, size):
+    """Stream an upload of `size` bytes from `src` into the profile's uploads; videos also get frames for the agent."""
     name = re.sub(r"[^\w.\- ()]+", "_", Path(name).name)[:120] or "file"
     free = disk_free(prof.dir)
-    if free is not None and free < len(data) + UPLOAD_HEADROOM:
-        raise ValueError(f"{DISK_FULL} ({mb(free)} free), so {name} ({mb(len(data))}) can't be attached. "
+    if free is not None and free < size + UPLOAD_HEADROOM:
+        raise ValueError(f"{DISK_FULL} ({mb(free)} free), so {name} ({mb(size)}) can't be attached. "
                          "Free up some space and try again.")
     d = prof.dir / "uploads" / uuid.uuid4().hex[:10]
     f = d / name
     try:
         d.mkdir(parents=True, exist_ok=True)
-        f.write_bytes(data)
+        with f.open("wb") as out:
+            left = size
+            while left > 0:
+                chunk = src.read(min(left, 1 << 20))
+                if not chunk:
+                    raise ValueError(f"The upload of {name} was cut off")
+                out.write(chunk)
+                left -= len(chunk)
     except OSError as e:
         shutil.rmtree(d, ignore_errors=True)  # don't keep a half-written file using up what space is left
         raise ValueError(f"{DISK_FULL}, so {name} can't be attached. Free up some space and try again." if e.errno == 28
                          else f"Couldn't save {name}: {e.strerror or e}")
-    kind = "image" if f.suffix.lower() in IMAGE_TYPES else "file"
-    return {"name": name, "path": str(f), "size": len(data), "kind": kind,
-            "mime": mimetypes.guess_type(name)[0] or "application/octet-stream"}
+    except ValueError:
+        shutil.rmtree(d, ignore_errors=True)
+        raise
+    ext = f.suffix.lower()
+    kind = "image" if ext in IMAGE_TYPES else "file"
+    rec = {"name": name, "path": str(f), "size": size, "mime": mimetypes.guess_type(name)[0] or "application/octet-stream"}
+    if ext in VIDEO_TYPES or ext == ".gif":
+        duration = probe_duration(f) if shutil.which("ffprobe") else 0.0
+        if ext in VIDEO_TYPES or duration > 0.2:  # a still GIF stays an image
+            kind = "video"
+            rec["duration"] = duration
+            if shutil.which("ffmpeg"):
+                extract_frames(f, duration)
+            rec["frames"] = [x["path"] for x in video_frames({**rec, "kind": kind})]
+    return {**rec, "kind": kind}
 
 
 # ---------------------------------------------------------------- built-in terminal (for terminal-only agents)
@@ -3938,6 +4026,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_file(self, f, ctype, headers):
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(f.stat().st_size))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in headers.items():
+            self.send_header(k, v)
+        self.end_headers()
+        with f.open("rb") as src:
+            shutil.copyfileobj(src, self.wfile, 1 << 20)
+
     def _redirect(self, url):
         self._send(302, b"", "text/plain", {"Location": url})
 
@@ -4019,7 +4118,9 @@ class Handler(BaseHTTPRequestHandler):
                 f = allowed_file(prof, qs.get("path", [""])[0])
                 ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
                 hdr = {"Content-Disposition": ("attachment" if qs.get("dl") else "inline") + f"; filename*=UTF-8''{urllib.parse.quote(f.name)}"}
-                return self._send(200, f.read_bytes(), ctype, hdr)
+                if f.stat().st_size < 8 * 1024 * 1024:
+                    return self._send(200, f.read_bytes(), ctype, hdr)
+                return self._send_file(f, ctype, hdr)  # videos and other big files: stream, don't load into memory
             if u.path == "/api/proc/log":
                 rec = PROCS.get(qs.get("id", [""])[0])
                 return self._send(200, {"lines": list(rec["log"]) if rec else []})
@@ -4137,12 +4238,13 @@ class Handler(BaseHTTPRequestHandler):
             pid = login_profile(self.headers.get("X-Login"))
             if not pid:
                 return self._send(401, {"error": "login required", "login": True})
-            if n > 100 * 1024 * 1024:
-                return self._send(413, {"error": "File is larger than 100 MB"})
-            data = self.rfile.read(n)  # read it all first, so the browser always gets an answer rather than a reset
+            if n > MAX_UPLOAD:
+                self.close_connection = True  # the unread body would otherwise be taken for the next request
+                return self._send(413, {"error": f"File is larger than {MAX_UPLOAD // 1024 ** 3} GB"})
             try:
-                return self._send(200, save_upload(Profile.get(pid), parse_qs(u.query).get("name", ["file"])[0], data))
+                return self._send(200, save_upload(Profile.get(pid), parse_qs(u.query).get("name", ["file"])[0], self.rfile, n))
             except ValueError as e:
+                self.close_connection = True  # whatever wasn't read of the body mustn't be parsed as a request
                 return self._send(507, {"error": str(e)})
         try:
             body = json.loads(self.rfile.read(n) or b"{}")

@@ -217,6 +217,9 @@ input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; m
 .bubble { background: var(--accent); color: var(--accent-fg); padding: 7px 12px; border-radius: 17px; white-space: pre-wrap; }
 .msg-files { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .msg-files img { max-width: 180px; max-height: 140px; border-radius: 10px; display: block; border: 0.5px solid var(--line); }
+.video-thumb { position: relative; display: block; }
+.video-thumb span { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; pointer-events: none; }
+.video-thumb span .ic { width: 30px; height: 30px; padding: 7px; border-radius: 50%; background: rgba(0, 0, 0, .55); }
 .file-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px; background: var(--control); border: 0.5px solid var(--line); color: var(--text); text-decoration: none; font-size: .92em; max-width: 240px; }
 .file-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg.assistant { line-height: 1.6; }
