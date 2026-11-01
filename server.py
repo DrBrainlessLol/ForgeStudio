@@ -963,7 +963,7 @@ class Run:
             self.text_buf["text"] = ""
 
     def outputs_note(self):
-        return "\n\n" + OUTPUTS_PROMPT.format(dir=chat_outputs(self.prof, self.cid))
+        return "\n\n" + DIRECT_PROMPT + "\n\n" + OUTPUTS_PROMPT.format(dir=chat_outputs(self.prof, self.cid))
 
     def think(self, text, sub=False):
         tb = self.think_buf
@@ -1119,7 +1119,7 @@ class Run:
                 cmd += ["--mcp-config", json.dumps({"mcpServers": {"jetbrains": {
                     "type": "sse" if jb.endswith("/sse") else "http", "url": jb}}})]
                 extra += "\n\n" + JB_PROMPT
-        cmd += ["--add-dir", str(out_dir), "--append-system-prompt", extra]
+        cmd += ["--add-dir", str(out_dir), "--append-system-prompt", DIRECT_PROMPT + "\n\n" + extra]
         if mode == "ask":
             cmd += ["--permission-mode", "default", "--permission-prompt-tool", "stdio"]
         elif mode in ("acceptEdits", "auto", "plan"):
@@ -1240,6 +1240,8 @@ class Run:
             if f["kind"] == "image":
                 flags += ["-i", f["path"]]
         prompt = self.agent_prompt() + attachment_note(self.files)
+        if not self.chat.get("session"):  # codex exec takes no system prompt: lead the first turn with it (resume keeps it)
+            prompt = DIRECT_PROMPT + "\n\n" + prompt
         base = [shutil.which("codex", path=tool_env()["PATH"]), "exec"]
         cmd = base + flags + (["resume", self.chat["session"]] if self.chat.get("session") else ["-C", self.project]) + ["--", prompt]
         err_lines = self.spawn(cmd, tool_env(), stdin=subprocess.DEVNULL)
@@ -1766,6 +1768,10 @@ OUTPUTS_PROMPT = ("You are running inside Forge Studio. When the user asks for a
                   "{dir} — Forge Studio shows everything there to the user with Download and Open buttons. You may use any "
                   "tool or script to produce it (e.g. Python's zipfile, pandoc, LibreOffice in headless mode). Mention the "
                   "file name in your reply.")
+DIRECT_PROMPT = ("Do what the user asks, directly and completely. The user is the developer and owns the decisions: don't "
+                 "second-guess, lecture, or pad replies with legal, licensing, ethical or \"consult a professional\" caveats "
+                 "they didn't ask for. If something is ambiguous, pick the sensible reading and go; only stop to ask when a "
+                 "step would destroy data or can't be undone.")
 DELIVERABLE_EXT = {".zip", ".tar", ".gz", ".tgz", ".7z", ".pdf", ".docx", ".doc", ".odt", ".rtf", ".xlsx", ".xls", ".ods",
                    ".csv", ".pptx", ".odp", ".epub", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".mp3", ".wav",
                    ".ogg", ".mp4", ".webm", ".apk", ".aab", ".ipa", ".dmg", ".deb", ".exe", ".msi"}
