@@ -22,7 +22,9 @@ class LoginNeeded extends Error {}
 async function api(path, body) {
   const opts = { headers: { "X-Token": TOKEN, "X-Login": LOGIN } };
   if (body !== undefined) { opts.method = "POST"; opts.body = JSON.stringify(body); opts.headers["Content-Type"] = "application/json"; }
-  const r = await fetch(path, opts);
+  let r;
+  try { r = await fetch(path, opts); }
+  catch (e) { throw new Error(`${e.message} (${path.split("?")[0]}) — a browser extension (ad/tracker blocker) may be blocking this request`); }
   const ct = r.headers.get("content-type") || "";
   const data = ct.includes("json") ? await r.json() : await r.blob();
   if (r.status === 401 && data.login) { showLogin(); throw new LoginNeeded("Please sign in"); }
@@ -634,7 +636,7 @@ async function openChat(cid) {
   S.chatWindow = 0;
   S.curChat[S.cur] = cid;
   if (cid && !S.loaded[cid]) {
-    const d = await api("/api/chat/log?id=" + cid);
+    const d = await api("/api/chat/load?id=" + cid);
     const items = [];
     for (const ev of d.events) applyEvent(items, ev);
     for (const ap of d.pending || []) applyEvent(items, ap);
@@ -1594,7 +1596,7 @@ function appendLog(pre, line) {
   if (atBottom) pre.scrollTop = pre.scrollHeight;
 }
 async function loadLog(id, pre) {
-  const { lines } = await api("/api/proc/log?id=" + id);
+  const { lines } = await api("/api/proc/output?id=" + id);
   pre.textContent = "";
   S.procLogs[id] = lines;
   lines.forEach((l) => appendLog(pre, l));
@@ -1644,7 +1646,7 @@ function attachRunLog() {
   $("#btnLogcat").hidden = LC.flutter;
   const kind = LC.flutter ? "flutter" : "logcat";
   const l = p && S.procs.filter((x) => x.kind === kind && x.project === p.path).pop();
-  if (l) { attachLogcat(l.id, l.running); api("/api/proc/log?id=" + l.id).then((d) => { if (LC.proc === l.id) { d.lines.forEach((x) => lcAdd(x, true)); lcRender(); } }).catch(() => {}); }
+  if (l) { attachLogcat(l.id, l.running); api("/api/proc/output?id=" + l.id).then((d) => { if (LC.proc === l.id) { d.lines.forEach((x) => lcAdd(x, true)); lcRender(); } }).catch(() => {}); }
   else { lcSetRunning(false); lcRender(); }
 }
 // ---- flutter

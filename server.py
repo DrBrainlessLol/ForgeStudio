@@ -4110,7 +4110,7 @@ class Handler(BaseHTTPRequestHandler):
                                key=lambda c: c.get("updated", 0), reverse=True)
                 return self._send(200, {"chats": [dict(c, running=c["id"] in RUNS and RUNS[c["id"]].running())
                                                   for c in chats]})
-            if u.path == "/api/chat/log":
+            if u.path in ("/api/chat/log", "/api/chat/load"):  # /log kept for old clients; content blockers (uBlock) kill URLs ending in /log
                 cid = qs.get("id", [""])[0]
                 if cid not in prof.data["chats"]:
                     return self._send(404, {"error": "chat not found"})
@@ -4127,7 +4127,7 @@ class Handler(BaseHTTPRequestHandler):
                 if f.stat().st_size < 8 * 1024 * 1024:
                     return self._send(200, f.read_bytes(), ctype, hdr)
                 return self._send_file(f, ctype, hdr)  # videos and other big files: stream, don't load into memory
-            if u.path == "/api/proc/log":
+            if u.path in ("/api/proc/log", "/api/proc/output"):
                 rec = PROCS.get(qs.get("id", [""])[0])
                 return self._send(200, {"lines": list(rec["log"]) if rec else []})
             if u.path == "/api/setup/status":
