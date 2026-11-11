@@ -1349,3 +1349,5 @@ html[data-density="compact"] .show-side { height: 24px; padding: 0 8px; }
 .pop-free > .ic { width: 15px; height: 15px; color: var(--ok); flex: none; }
 .pop-free > span { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .pop-free small { color: var(--dim); font-size: .9em; }
+
+.draft-tag { font-style: normal; font-size: .72em; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; margin-right: 4px; }

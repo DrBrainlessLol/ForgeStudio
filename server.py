@@ -453,8 +453,48 @@ _subs = []  # (queue, profile id)
 _subs_lock = threading.Lock()
 
 
+NOTICES = deque(maxlen=300)  # approvals, finished runs, builds and crashes: what a phone polls for when it isn't connected live
+_crash_at = [0.0]
+
+
+def _brief(inp):
+    if isinstance(inp, dict):
+        for k in ("command", "file_path", "path", "pattern", "url", "description", "prompt"):
+            if inp.get(k):
+                return str(inp[k])[:240]
+        return json.dumps(inp)[:240]
+    return str(inp or "")[:240]
+
+
+def note_event(event, profile):
+    """Keep a short, timestamped record of the events worth a notification."""
+    t, now = event.get("type"), time.time()
+    n = None
+    if t == "chat":
+        ev = event.get("event") or {}
+        proj = (event.get("project") or "").rsplit("/", 1)[-1]
+        if ev.get("type") == "approval":
+            n = {"kind": "approval", "id": ev.get("id"), "title": f"Allow {ev.get('tool') or 'a tool'}?" + (f"  ·  {proj}" if proj else ""), "text": _brief(ev.get("input"))}
+        elif ev.get("type") == "result":
+            n = {"kind": "done", "id": "done:" + str(event.get("chat")), "title": "Run stopped with an error" if ev.get("error") else "Run finished", "text": proj or "Forge"}
+    elif t == "proc_exit" and event.get("kind") in ("gradle", "flutter-task"):
+        ok = event.get("code") == 0
+        n = {"kind": "build", "id": "build:" + str(event.get("proc")), "title": "Build finished" if ok else "Build failed", "text": str(event.get("label") or "")}
+    elif t == "log" and event.get("kind") == "logcat":
+        line = event.get("line") or ""
+        if ("FATAL EXCEPTION" in line or "ANR in " in line) and now - _crash_at[0] > 15:
+            _crash_at[0] = now
+            n = {"kind": "crash", "id": "crash", "title": "App not responding" if "ANR in " in line else "App crashed", "text": (event.get("project") or "").rsplit("/", 1)[-1] or "Your Android app"}
+    if n:
+        NOTICES.append(dict(n, ts=now, profile=profile))
+
+
 def emit(event, profile=None):
     """Send an event to every connected UI; profile-scoped events only reach that profile."""
+    try:
+        note_event(event, profile)
+    except Exception:
+        pass
     with _subs_lock:
         for q, pid in list(_subs):
             if profile and pid != profile:
@@ -2253,6 +2293,49 @@ def chat_outputs(prof, cid):
     return d
 
 
+_CHAT_FILES = {}
+
+
+def chat_files(prof, project):
+    """Every file that belongs to this project's chats: what the agent made, what was attached, and its screenshots."""
+    out, seen = [], set()
+    chats = sorted((c for c in prof.data["chats"].values() if not project or c["project"] == project), key=lambda c: c.get("updated", 0), reverse=True)
+    for c in chats:
+        log = prof.chat_log(c["id"])
+        try:
+            key = (log.stat().st_mtime_ns, log.stat().st_size)
+        except OSError:
+            continue
+        cached = _CHAT_FILES.get(c["id"])
+        if not cached or cached[0] != key:
+            found = []
+            for ev in read_jsonl(log):
+                t = ev.get("type")
+                if t == "outputs":
+                    found += [(f, "made") for f in ev.get("files") or []]
+                elif t == "user":
+                    found += [(f, "attached") for f in ev.get("files") or []]
+                elif t == "tool_results":
+                    for r in ev.get("results") or []:
+                        found += [({"path": p, "name": Path(p).name, "kind": "image"}, "screenshot") for p in r.get("images") or []]
+            _CHAT_FILES[c["id"]] = cached = (key, found)
+        for f, src in cached[1]:
+            path = f.get("path")
+            if not path or path in seen:
+                continue
+            try:
+                st = Path(path).stat()
+            except OSError:
+                continue  # deleted since
+            seen.add(path)
+            ext = Path(path).suffix.lower()
+            out.append({"chat": c["id"], "chatTitle": c.get("title") or "Chat", "name": f.get("name") or Path(path).name, "path": path, "size": st.st_size,
+                        "kind": "image" if (f.get("kind") == "image" or ext in IMAGE_TYPES) else "file", "mime": f.get("mime") or mimetypes.guess_type(path)[0] or "",
+                        "source": src, "mtime": st.st_mtime})
+    out.sort(key=lambda f: f["mtime"], reverse=True)
+    return out[:3000]
+
+
 def new_outputs(prof, cid, project, since):
     """Files made for the user during a turn: everything new in the chat's outputs folder, plus deliverable-type files
     (archives, documents, images, media, app packages) created or changed in the project."""
@@ -3901,6 +3984,68 @@ def allowed_file(prof, path):
     return f
 
 
+# ---------------------------------------------------------------- lock screen (leave the computer running, but locked)
+def _sh(cmd, timeout=8):
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={env['XDG_RUNTIME_DIR']}/bus")
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _session_id():
+    r = _sh(["loginctl", "list-sessions", "--no-legend"])
+    user = os.environ.get("USER") or os.getlogin()
+    for line in (r.stdout.splitlines() if r else []):
+        f = line.split()
+        if len(f) >= 3 and f[2] == user:
+            return f[0]
+    return os.environ.get("XDG_SESSION_ID")
+
+
+def lock_state():
+    """(supported, locked): Deepin's lock screen reports Visible; other desktops report logind's LockedHint."""
+    if IS_MAC or not shutil.which("loginctl"):
+        return {"supported": bool(IS_MAC), "locked": None}
+    if shutil.which("busctl"):
+        r = _sh(["busctl", "--user", "get-property", "org.deepin.dde.LockFront1", "/org/deepin/dde/LockFront1", "org.deepin.dde.LockFront1", "Visible"])
+        if r and r.returncode == 0 and r.stdout.startswith("b "):
+            return {"supported": True, "locked": r.stdout.split()[1] == "true", "method": "deepin"}
+    sid = _session_id()
+    r = _sh(["loginctl", "show-session", sid or "", "-p", "LockedHint", "--value"]) if sid else None
+    return {"supported": bool(r and r.returncode == 0), "locked": bool(r and r.stdout.strip() == "yes"), "method": "logind"}
+
+
+def lock_screen():
+    if IS_MAC:
+        r = _sh(["pmset", "displaysleepnow"])
+        return bool(r and r.returncode == 0)
+    attempts = []
+    if shutil.which("busctl"):
+        attempts.append(["busctl", "--user", "call", "org.deepin.dde.LockFront1", "/org/deepin/dde/LockFront1", "org.deepin.dde.LockFront1", "Show"])
+    sid = _session_id()
+    if sid:
+        attempts.append(["loginctl", "lock-session", sid])
+    for cmd in attempts:
+        r = _sh(cmd)
+        if r and r.returncode == 0:
+            return True
+    return False
+
+
+def unlock_screen():
+    if not CONFIG["settings"].get("remoteUnlock"):
+        raise ValueError("Unlocking from the phone is off. Turn it on in Forge Studio: Settings → Web App.")
+    sid = _session_id()
+    r = _sh(["loginctl", "unlock-session", sid]) if sid else None
+    time.sleep(1.2)
+    if lock_state().get("locked"):
+        raise ValueError("This computer's lock screen didn't release. Unlock it at the keyboard.")
+    return bool(r and r.returncode == 0)
+
+
 LAN = {"server": None}
 
 
@@ -3967,7 +4112,8 @@ def tunnel_info():
 def web_access_info():
     on = bool(LAN["server"])
     return {"lan": on, "url": f"http://{lan_ip()}:{PORT + 1}/#token={TOKEN}" if on else None, "local": f"{ORIGIN}/#token={TOKEN}",
-            "tunnel": tunnel_info(), "shell": shell_allowed()}
+            "tunnel": tunnel_info(), "shell": shell_allowed(),
+            "lock": dict(lock_state(), unlock=bool(CONFIG["settings"].get("remoteUnlock")))}
 
 
 def tunnel_start():
@@ -4513,7 +4659,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, {"error": "login required", "login": True})
             prof = Profile.get(pid)
             if u.path == "/api/events":
-                return self.sse(pid)
+                return self.sse(pid, ping=min(90, max(10, int(qs.get("ping", ["15"])[0] or 15))))
             if u.path == "/api/state":
                 return self._send(200, self.state(prof))
             if u.path == "/api/chats":
@@ -4532,6 +4678,13 @@ class Handler(BaseHTTPRequestHandler):
                         for k, v in APPROVALS.items() if v["chat"] == cid]
                 return self._send(200, {"chat": prof.data["chats"][cid], "events": events, "pending": pend,
                                         "running": cid in RUNS and RUNS[cid].running()})
+            if u.path == "/api/notices":
+                since = float(qs.get("since", ["0"])[0] or 0)
+                items = [dict(n) for n in NOTICES if n["ts"] > since and (not n.get("profile") or n["profile"] == prof.pid)
+                         and (n["kind"] != "approval" or n["id"] in APPROVALS)]  # an approval already answered is no longer news
+                return self._send(200, {"now": time.time(), "items": items})
+            if u.path == "/api/chat/files":
+                return self._send(200, {"files": chat_files(prof, qs.get("project", [""])[0])})
             if u.path == "/api/file":
                 f = allowed_file(prof, qs.get("path", [""])[0])
                 ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
@@ -4878,6 +5031,18 @@ class Handler(BaseHTTPRequestHandler):
             CONFIG["settings"]["lan"] = bool(b.get("enabled"))
             save_config()
             return web_access_info()
+        if path == "/api/lock":
+            if b.get("action") == "unlock":
+                unlock_screen()
+            else:
+                if not lock_screen():
+                    raise ValueError("Couldn't lock this computer")
+                time.sleep(0.6)
+            return web_access_info()
+        if path == "/api/unlock-access":
+            CONFIG["settings"]["remoteUnlock"] = bool(b.get("enabled"))
+            save_config()
+            return web_access_info()
         if path == "/api/shell-access":
             CONFIG["settings"]["shellAccess"] = bool(b.get("enabled"))
             save_config()
@@ -5122,7 +5287,7 @@ class Handler(BaseHTTPRequestHandler):
             sock.close()
             cleanup()
 
-    def sse(self, pid):
+    def sse(self, pid, ping=15):
         q = queue.Queue(maxsize=5000)
         entry = (q, pid)
         with _subs_lock:
@@ -5137,7 +5302,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
             while True:
                 try:
-                    ev = q.get(timeout=15)
+                    ev = q.get(timeout=ping)
                     self.wfile.write(f"data: {json.dumps(ev)}\n\n".encode())
                 except queue.Empty:
                     self.wfile.write(b": ping\n\n")

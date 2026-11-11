@@ -645,6 +645,7 @@ async function openChat(cid) {
   }
   if (cid && S.meta[cid]?.agent && $("#agent").value !== S.meta[cid].agent && S.agents.some((a) => a.id === S.meta[cid].agent)) { $("#agent").value = S.meta[cid].agent; agentChanged(false); }
   renderChat();
+  switchDraft(S.cur, cid);
   api("/api/chat/select", { project: S.cur, chat: cid }).catch(() => {});
 }
 
@@ -976,6 +977,28 @@ function showAgent() {
 }
 // anything that puts text in the message box (Ask agent, Ask, Ask to fix…) brings a hidden agent chat back
 { const box = $("#prompt"), focus = box.focus.bind(box); box.focus = (...a) => { showAgent(); focus(...a); }; }
+// ---- message drafts: whatever is in the message box survives a crash, a closed window or a restart
+const draftKey = (project, cid) => project ? `fs:draft:${project}|${cid || "new"}` : null;
+const hasDraft = (project, cid) => { const k = draftKey(project, cid); return !!(k && (localStorage.getItem(k) || "").trim()); };
+function saveDraftNow() {
+  const k = S.draftKey;
+  if (!k) return;
+  const v = $("#prompt").value;
+  try { v.trim() ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch {}
+}
+let draftTimer = 0;
+function scheduleDraft() { clearTimeout(draftTimer); draftTimer = setTimeout(saveDraftNow, 250); }
+/** The message box now belongs to this chat: keep the previous chat's text as its draft, show this chat's draft. */
+function switchDraft(project, cid) {
+  saveDraftNow();
+  S.draftKey = draftKey(project, cid);
+  const box = $("#prompt");
+  box.value = (S.draftKey && localStorage.getItem(S.draftKey)) || "";
+  box.style.height = ""; if (box.value) box.dispatchEvent(new Event("input"));
+}
+addEventListener("beforeunload", saveDraftNow);
+addEventListener("pagehide", saveDraftNow);
+document.addEventListener("visibilitychange", () => { if (document.hidden) saveDraftNow(); });
 async function send(text) {
   showAgent();
   text = (text ?? $("#prompt").value).trim();
@@ -993,6 +1016,8 @@ async function send(text) {
   S.items[r.chat] ??= [];
   if (!cid) { S.curChat[p] = r.chat; if (S.cur === p) renderChat(); }
   $("#prompt").value = ""; $("#prompt").style.height = ""; S.attachments = []; renderAttachments();
+  try { localStorage.removeItem(draftKey(p, cid)); } catch {}
+  S.draftKey = draftKey(p, r.chat);
 }
 
 // ============================================================ history
@@ -1061,7 +1086,7 @@ function convRow(c, opts = {}) {
   const running = !!S.running[c.id], unread = !running && (S.done || []).some((d) => d.cid === c.id);
   li.className = "conv" + (c.id === chatId() && c.project === S.cur ? " active" : "") + (running ? " run" : "");
   li.title = c.title || "Chat";
-  li.innerHTML = `<span class="conv-title">${esc(c.title || "Chat")}</span>${opts.project ? `<span class="conv-proj">${esc((c.project || "").split("/").pop())}</span>` : ""}`
+  li.innerHTML = `<span class="conv-title">${hasDraft(c.project, c.id) ? '<i class="draft-tag">Draft</i> ' : ""}${esc(c.title || "Chat")}</span>${opts.project ? `<span class="conv-proj">${esc((c.project || "").split("/").pop())}</span>` : ""}`
     + (running ? '<span class="conv-state spin" title="Working"></span>' : unread ? '<span class="conv-state unread" title="Finished"></span>' : `<span class="conv-time">${shortAgo(c.updated || c.created)}</span>`);
   li.onclick = act(async (e) => {
     e.stopPropagation();
@@ -1551,6 +1576,7 @@ $("#lanToggle").onchange = act(async () => { S.web = await api("/api/web-access"
 function renderTunnel() {
   const t = S.web?.tunnel; if (!t) return;
   $("#shellToggle").checked = !!S.web?.shell;
+  $("#unlockToggle").checked = !!S.web?.lock?.unlock;
   if (document.activeElement !== $("#tnHost")) $("#tnHost").value = t.host || "";
   $("#tnAccess").checked = t.access;
   if (document.activeElement !== $("#tnCfId")) $("#tnCfId").value = t.cfId || "";
@@ -1575,6 +1601,7 @@ const saveTunnel = async () => {
   S.web = { ...S.web, tunnel: await api("/api/tunnel", body) }; $("#tnToken").value = ""; $("#tnCfSecret").value = ""; renderTunnel();
 };
 $("#shellToggle").onchange = act(async () => { S.web = await api("/api/shell-access", { enabled: $("#shellToggle").checked }); renderTunnel(); });
+$("#unlockToggle").onchange = act(async () => { S.web = await api("/api/unlock-access", { enabled: $("#unlockToggle").checked }); renderTunnel(); });
 $("#tnSave").onclick = act(async () => { await saveTunnel(); toast("Saved"); });
 $("#tnAccess").onchange = act(saveTunnel);
 $("#tnRun").onclick = act(async () => {
@@ -2425,7 +2452,7 @@ $("#style").onchange = () => styleChanged();
 $("#effort").onchange = () => store.set(pkey("effort"), $("#effort").value);
 $("#btnFast").onclick = () => { $("#btnFast").classList.toggle("on"); store.set(pkey("fast"), $("#btnFast").classList.contains("on"));
   syncComposer(); toast($("#btnFast").classList.contains("on") ? "Fast mode on: quicker replies (supported Claude models)" : "Fast mode off"); };
-$("#prompt").oninput = () => { const t = $("#prompt"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, innerHeight * 0.4) + "px"; };
+$("#prompt").oninput = () => { const t = $("#prompt"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, innerHeight * 0.4) + "px"; scheduleDraft(); };
 $("#prompt").onpaste = (e) => {
   const files = [...(e.clipboardData?.files || [])];
   if (files.length) { e.preventDefault(); act(addFiles)(files); }
