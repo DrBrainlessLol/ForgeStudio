@@ -1577,6 +1577,7 @@ function renderTunnel() {
   const t = S.web?.tunnel; if (!t) return;
   $("#shellToggle").checked = !!S.web?.shell;
   $("#unlockToggle").checked = !!S.web?.lock?.unlock;
+  $("#proxyToggle").checked = !!S.web?.proxyAny;
   $("#adbControlToggle").checked = !!S.web?.adb?.control; $("#adbShellToggle").checked = !!S.web?.adb?.shell;
   $("#recoverSet").textContent = S.web?.recovery ? "Change" : "Set"; $("#recoverClear").hidden = !S.web?.recovery;
   if (document.activeElement !== $("#tnHost")) $("#tnHost").value = t.host || "";
@@ -1604,6 +1605,7 @@ const saveTunnel = async () => {
 };
 $("#shellToggle").onchange = act(async () => { S.web = await api("/api/shell-access", { enabled: $("#shellToggle").checked }); renderTunnel(); });
 $("#unlockToggle").onchange = act(async () => { S.web = await api("/api/unlock-access", { enabled: $("#unlockToggle").checked }); renderTunnel(); });
+$("#proxyToggle").onchange = act(async () => { S.web = await api("/api/proxy-access", { enabled: $("#proxyToggle").checked }); renderTunnel(); });
 $("#adbControlToggle").onchange = act(async () => { S.web = await api("/api/adb-access", { control: $("#adbControlToggle").checked }); renderTunnel(); });
 $("#adbShellToggle").onchange = act(async () => { S.web = await api("/api/adb-access", { shell: $("#adbShellToggle").checked }); renderTunnel(); });
 $("#recoverSet").onclick = act(async () => { S.web = await api("/api/recovery-pin", { pin: $("#recoverPin").value }); $("#recoverPin").value = ""; renderTunnel(); toast("Recovery PIN saved"); });

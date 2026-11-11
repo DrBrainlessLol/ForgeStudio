@@ -7,6 +7,9 @@ website dev previews, and building / running / live-debugging Android projects v
 Gradle + adb and Flutter projects via the flutter tool (hot reload over its daemon protocol). Profiles sign in with Google (optional) or a local name + PIN.
 """
 import base64
+import zipfile
+import tarfile
+import http.client
 import hashlib
 import json
 import mimetypes
@@ -1255,7 +1258,7 @@ def attachment_note(files):
     for f in others:
         frames = video_frames(f) if f["kind"] == "video" else []
         if f["kind"] != "video":
-            lines.append(f"- {f['name']}: {f['path']}")
+            lines.append(f"- {f['name']}: {f['path']}" + ("\n" + archive_note(f) if f["name"].lower().endswith(ARCHIVE_EXT) and archive_note(f) else ""))
         elif frames:
             lines.append(f"- {f['name']} (video, {clock(f.get('duration') or 0)} long): {f['path']}. {len(frames)} frames "
                          f"from it, at {', '.join(x['name'].rsplit(' @ ', 1)[1] for x in frames)}, are attached as images "
@@ -3810,6 +3813,104 @@ def extract_frames(f, duration):
     return len(times)
 
 
+ARCHIVE_EXT = (".zip", ".apk", ".aab", ".jar", ".aar", ".war", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz")
+EXTRACT_MAX_BYTES, EXTRACT_MAX_FILES = 800 * 1024 * 1024, 30_000
+
+
+def _safe_rel(name):
+    """A member name that stays inside the extraction folder, or None."""
+    n = name.replace("\\", "/").lstrip("/")
+    parts = [x for x in n.split("/") if x not in ("", ".")]
+    return None if not parts or ".." in parts else "/".join(parts)
+
+
+def extract_archive(f):
+    """Unpack an uploaded zip / APK / tar next to it, refusing path tricks, links and zip bombs. Returns a summary or None."""
+    low = f.name.lower()
+    if not low.endswith(ARCHIVE_EXT):
+        return None
+    dest = f.parent / "extracted"
+    total = count = 0
+    tree = []
+    try:
+        if zipfile.is_zipfile(f):
+            with zipfile.ZipFile(f) as z:
+                for zi in z.infolist():
+                    rel = _safe_rel(zi.filename)
+                    if rel is None or (zi.external_attr >> 16) & 0o170000 == 0o120000:
+                        continue
+                    count += 1
+                    total += zi.file_size
+                    if count > EXTRACT_MAX_FILES or total > EXTRACT_MAX_BYTES:
+                        raise ValueError("too big to unpack safely")
+                    if not zi.is_dir():
+                        out = dest / rel
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        with z.open(zi) as src, out.open("wb") as dst:
+                            shutil.copyfileobj(src, dst)
+                    tree.append(rel + ("/" if zi.is_dir() else ""))
+        elif tarfile.is_tarfile(f):
+            with tarfile.open(f) as t:
+                for ti in t:
+                    rel = _safe_rel(ti.name)
+                    if rel is None or not (ti.isfile() or ti.isdir()):
+                        continue
+                    count += 1
+                    total += ti.size
+                    if count > EXTRACT_MAX_FILES or total > EXTRACT_MAX_BYTES:
+                        raise ValueError("too big to unpack safely")
+                    if ti.isfile():
+                        out = dest / rel
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        with t.extractfile(ti) as src, out.open("wb") as dst:
+                            shutil.copyfileobj(src, dst)
+                    tree.append(rel + ("/" if ti.isdir() else ""))
+        else:
+            return None
+    except (zipfile.BadZipFile, tarfile.TarError, ValueError, OSError) as e:
+        shutil.rmtree(dest, ignore_errors=True)
+        return {"error": f"Couldn't unpack it: {e}"}
+    return {"dir": str(dest), "files": count, "bytes": total, "tree": sorted(tree)[:120], "truncated": len(tree) > 120}
+
+
+def apk_info(f):
+    """Package details from the APK's binary manifest, using aapt2 from the Android SDK when it's installed."""
+    sdk = find_sdk()
+    tools = sorted((sdk / "build-tools").glob("*/aapt2")) if sdk and (sdk / "build-tools").is_dir() else []
+    exe = str(tools[-1]) if tools else shutil.which("aapt2")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "dump", "badging", str(f)], capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    g = lambda pat: (re.search(pat, out) or [None, None])[1]  # noqa: E731
+    return {"package": g(r"package: name='([^']+)'"), "versionName": g(r"versionName='([^']*)'"), "versionCode": g(r"versionCode='(\d+)'"),
+            "label": g(r"application-label:'([^']*)'"), "minSdk": g(r"(?:^|\n)(?:minS|s)dkVersion:'(\d+)'"), "targetSdk": g(r"targetSdkVersion:'(\d+)'"),
+            "permissions": re.findall(r"uses-permission: name='([^']+)'", out)[:60], "abis": (g(r"native-code: ([^\n]+)") or "").replace("'", "").split()}
+
+
+def archive_note(f):
+    """What to tell the agent about an uploaded archive/APK (read from the summary saved at upload time)."""
+    try:
+        a = json.loads((Path(f["path"]).parent / ".forge-archive.json").read_text())
+    except (OSError, ValueError, KeyError):
+        return ""
+    if a.get("error"):
+        return f"  (could not be unpacked: {a['error']})"
+    lines = [f"  Unpacked into {a['dir']} ({a['files']} files, {mb(a['bytes'])}). Read the files there directly."]
+    if a.get("apk"):
+        k = a["apk"]
+        lines.append(f"  Android app package: {k.get('package')} · {k.get('label') or ''} · v{k.get('versionName')} (code {k.get('versionCode')}) · minSdk {k.get('minSdk')}, targetSdk {k.get('targetSdk')}"
+                     + (f" · ABIs {', '.join(k['abis'])}" if k.get("abis") else ""))
+        if k.get("permissions"):
+            lines.append("  Permissions: " + ", ".join(x.replace("android.permission.", "") for x in k["permissions"]))
+        lines.append("  AndroidManifest.xml and resources are in Android's binary format: decode with `aapt2 dump xmltree`/`apkanalyzer` from the SDK build-tools, or `apktool` if installed. classes*.dex is Dalvik bytecode.")
+    top = [x for x in a["tree"] if "/" not in x.rstrip("/")][:30]
+    lines.append("  Top level: " + ", ".join(top) + (" …" if a.get("truncated") or len(top) == 30 else ""))
+    return "\n".join(lines)
+
+
 def save_upload(prof, name, src, size):
     """Stream an upload of `size` bytes from `src` into the profile's uploads; videos also get frames for the agent."""
     name = re.sub(r"[^\w.\- ()]+", "_", Path(name).name)[:120] or "file"
@@ -3847,6 +3948,16 @@ def save_upload(prof, name, src, size):
             if shutil.which("ffmpeg"):
                 extract_frames(f, duration)
             rec["frames"] = [x["path"] for x in video_frames({**rec, "kind": kind})]
+    if ext in (".zip", ".apk", ".aab", ".jar", ".aar", ".war", ".tar", ".gz", ".tgz", ".bz2", ".tbz2", ".xz", ".txz"):
+        arch = extract_archive(f)
+        if arch:
+            if not arch.get("error") and ext == ".apk":
+                arch["apk"] = apk_info(f)
+            try:
+                (f.parent / ".forge-archive.json").write_text(json.dumps(arch))
+            except OSError:
+                pass
+            rec["archive"] = {k: v for k, v in arch.items() if k != "tree"} | {"top": [x for x in arch.get("tree", []) if "/" not in x.rstrip("/")][:12]}
     return {**rec, "kind": kind}
 
 
@@ -4156,6 +4267,22 @@ def device_ip(serial):
 ADB_GRANTABLE = {"android.permission.WRITE_SECURE_SETTINGS", "android.permission.POST_NOTIFICATIONS", "android.permission.RECORD_AUDIO"}
 
 
+def preview_ports():
+    out = set()
+    for st in PREVIEWS.values():
+        m = re.search(r":(\d+)", st.get("url") or "")
+        if m:
+            out.add(int(m.group(1)))
+    return out
+
+
+def proxy_port_ok(port):
+    """A dev server Forge started is always shareable; any other local port only when the user switched that on."""
+    if port in (PORT, PORT + 1):
+        return False
+    return port in preview_ports() or bool(CONFIG["settings"].get("proxyLocalhost"))
+
+
 LAN = {"server": None}
 
 
@@ -4223,7 +4350,7 @@ def web_access_info():
     on = bool(LAN["server"])
     return {"lan": on, "url": f"http://{lan_ip()}:{PORT + 1}/#token={TOKEN}" if on else None, "local": f"{ORIGIN}/#token={TOKEN}",
             "tunnel": tunnel_info(), "shell": shell_allowed(), "recovery": recovery_set(),
-            "adb": {"control": adb_control(), "shell": adb_shell_ok()},
+            "adb": {"control": adb_control(), "shell": adb_shell_ok()}, "proxyAny": bool(CONFIG["settings"].get("proxyLocalhost")),
             "lock": dict(lock_state(), unlock=bool(CONFIG["settings"].get("remoteUnlock")))}
 
 
@@ -4791,6 +4918,8 @@ class Handler(BaseHTTPRequestHandler):
                         for k, v in APPROVALS.items() if v["chat"] == cid]
                 return self._send(200, {"chat": prof.data["chats"][cid], "events": events, "pending": pend,
                                         "running": cid in RUNS and RUNS[cid].running()})
+            if u.path.startswith("/api/lp/"):
+                return self.local_proxy(u, "GET")
             if u.path == "/api/notices":
                 since = float(qs.get("since", ["0"])[0] or 0)
                 items = [dict(n) for n in NOTICES if n["ts"] > since and (not n.get("profile") or n["profile"] == prof.pid)
@@ -5153,6 +5282,10 @@ class Handler(BaseHTTPRequestHandler):
             save_config()
             return web_access_info()
         remote = (self.headers.get("Host") or "").rsplit(":", 1)[0] not in ("127.0.0.1", "localhost")  # a phone, not this computer's own UI
+        if path == "/api/proxy-access":
+            CONFIG["settings"]["proxyLocalhost"] = bool(b.get("enabled"))
+            save_config()
+            return web_access_info()
         if path == "/api/recovery-pin":
             pin = str(b.get("pin") or "")
             if pin and len(pin) < 6:
@@ -5475,6 +5608,41 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             sock.close()
             cleanup()
+
+    def local_proxy(self, u, method):
+        """Show a dev server running on this computer (localhost:PORT) to the phone, through the authenticated tunnel."""
+        m = re.match(r"/api/lp/(\d{2,5})(/.*)?$", u.path)
+        if not m:
+            return self._send(400, {"error": "bad preview address"})
+        port, rest = int(m.group(1)), (m.group(2) or "/") + (f"?{u.query}" if u.query else "")
+        if not proxy_port_ok(port):
+            return self._send(403, {"error": f"localhost:{port} isn't shared with the phone. Start it with Forge Studio's preview, or turn on “Let the phone open any localhost port” in Settings → Web App."})
+        hdrs = {k: v for k, v in self.headers.items() if k.lower() in ("accept", "accept-language", "range", "if-none-match", "if-modified-since", "user-agent", "cache-control")}
+        hdrs.update({"Accept-Encoding": "identity", "Host": f"localhost:{port}"})
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+            c.request(method, rest, headers=hdrs)
+            r = c.getresponse()
+            body = r.read(50 * 1024 * 1024 + 1) if method != "HEAD" else b""
+        except (OSError, http.client.HTTPException):
+            return self._send(502, {"error": f"Nothing is answering on localhost:{port}. Is the dev server running?"})
+        if len(body) > 50 * 1024 * 1024:
+            return self._send(413, {"error": "That file is too large to show here"})
+        self.send_response(r.status)
+        for k, v in r.getheaders():
+            kl = k.lower()
+            if kl in ("transfer-encoding", "connection", "content-length", "content-encoding", "keep-alive", "content-security-policy", "x-frame-options"):
+                continue
+            if kl == "location":  # keep redirects inside the preview
+                v = re.sub(rf"^https?://(?:localhost|127\.0\.0\.1):{port}", "", v)
+                if v.startswith("/"):
+                    v = f"/api/lp/{port}{v}"
+            self.send_header(k, v)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if method != "HEAD":
+            self.wfile.write(body)
 
     def sse(self, pid, ping=15):
         q = queue.Queue(maxsize=5000)
