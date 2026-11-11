@@ -706,6 +706,8 @@
         <div class="form-group">
           <label class="form-row"><span>Public hostname</span><input id="tnHost" class="mono" placeholder="forge.example.com" autocomplete="off"></label>
           <label class="form-row"><span>Tunnel token<br><small class="dim">from the tunnel's install command; stored on this computer</small></span><input id="tnToken" class="mono" type="password" placeholder="(unchanged)" autocomplete="off"></label>
+          <label class="form-row"><span>Access service token ID<br><small class="dim">goes into the pairing link for the phone</small></span><input id="tnCfId" class="mono" autocomplete="off"></label>
+          <label class="form-row"><span>Access service token secret</span><input id="tnCfSecret" class="mono" type="password" placeholder="(unchanged)" autocomplete="off"></label>
           <div class="form-row"><span>Only accept requests that passed Cloudflare Access<br><small class="dim">recommended: the tunnel is useless to anyone who can't sign in to Access</small></span><label class="switch"><input type="checkbox" id="tnAccess"><i></i></label></div>
           <div class="form-row"><span id="tnStatus" class="dim"></span><span class="row"><button class="btn" id="tnSave">Save</button><button class="btn" id="tnRun">Start tunnel</button></span></div>
         </div>

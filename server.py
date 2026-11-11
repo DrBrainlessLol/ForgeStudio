@@ -3920,7 +3920,8 @@ HOST_RE = re.compile(r"(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]
 
 def tunnel_cfg():
     t = CONFIG["settings"].get("tunnel") or {}
-    return {"host": (t.get("host") or "").lower(), "access": t.get("access") is not False, "token": t.get("token") or ""}
+    return {"host": (t.get("host") or "").lower(), "access": t.get("access") is not False, "token": t.get("token") or "",
+            "cfId": t.get("cfId") or "", "cfSecret": t.get("cfSecret") or ""}
 
 
 def cloudflared_path():
@@ -3937,9 +3938,12 @@ def tunnel_proc():
 def tunnel_info():
     t = tunnel_cfg()
     url = f"https://{t['host']}" if t["host"] else None
-    return {"host": t["host"], "access": t["access"], "hasToken": bool(t["token"]), "installed": bool(cloudflared_path()),
+    return {"host": t["host"], "access": t["access"], "hasToken": bool(t["token"]), "cfId": t["cfId"], "installed": bool(cloudflared_path()),
             "running": bool(tunnel_proc()), "url": url,
-            "pair": f"forge://pair?url={urllib.parse.quote(url, safe='')}&token={TOKEN}" if url else None}
+            "hasServiceToken": bool(t["cfId"]),
+            # the link carries the Access service token too, so the phone needs nothing typed in by hand
+            "pair": (f"forge://pair?url={urllib.parse.quote(url, safe='')}&token={TOKEN}"
+                     + (f"&cfid={urllib.parse.quote(t['cfId'])}&cfsecret={urllib.parse.quote(t['cfSecret'])}" if t["cfId"] else "")) if url else None}
 
 
 def web_access_info():
@@ -4863,8 +4867,9 @@ class Handler(BaseHTTPRequestHandler):
                 t["host"] = h
             if "access" in b:
                 t["access"] = bool(b["access"])
-            if b.get("token") is not None:
-                t["token"] = b["token"].strip()
+            for k in ("token", "cfId", "cfSecret"):
+                if b.get(k) is not None:
+                    t[k] = b[k].strip()
             CONFIG["settings"]["tunnel"] = t
             save_config()
             return tunnel_info()
@@ -5157,6 +5162,12 @@ def main():
             start_lan()
         except OSError as e:
             print("LAN access unavailable:", e, flush=True)
+    t = tunnel_cfg()
+    if t["host"] and t["token"] and cloudflared_path():  # a configured tunnel comes up with the server
+        try:
+            tunnel_start()
+        except (ValueError, OSError) as e:
+            print("Tunnel not started:", e, flush=True)
     print(f"Forge Studio running at {ORIGIN}/#token={TOKEN}", flush=True)
     srv.serve_forever()
 

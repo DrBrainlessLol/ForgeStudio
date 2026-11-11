@@ -1552,6 +1552,8 @@ function renderTunnel() {
   const t = S.web?.tunnel; if (!t) return;
   if (document.activeElement !== $("#tnHost")) $("#tnHost").value = t.host || "";
   $("#tnAccess").checked = t.access;
+  if (document.activeElement !== $("#tnCfId")) $("#tnCfId").value = t.cfId || "";
+  $("#tnCfSecret").placeholder = t.hasServiceToken ? "(saved — type to replace)" : "paste the service token secret";
   $("#tnToken").placeholder = t.hasToken ? "(saved — type to replace)" : "paste the tunnel token";
   $("#tnRun").textContent = t.running ? "Stop tunnel" : "Start tunnel";
   $("#tnStatus").textContent = !t.installed ? "cloudflared isn't installed on this computer" : t.running ? "Tunnel running" + (t.host ? ` → https://${t.host}` : "") : "Tunnel stopped";
@@ -1567,7 +1569,9 @@ const loadScript = (src) => (loadScript[src] ??= new Promise((res, rej) => { con
 const saveTunnel = async () => {
   const body = { host: $("#tnHost").value.trim(), access: $("#tnAccess").checked };
   if ($("#tnToken").value.trim()) body.token = $("#tnToken").value.trim();
-  S.web = { ...S.web, tunnel: await api("/api/tunnel", body) }; $("#tnToken").value = ""; renderTunnel();
+  body.cfId = $("#tnCfId").value.trim();
+  if ($("#tnCfSecret").value.trim()) body.cfSecret = $("#tnCfSecret").value.trim();
+  S.web = { ...S.web, tunnel: await api("/api/tunnel", body) }; $("#tnToken").value = ""; $("#tnCfSecret").value = ""; renderTunnel();
 };
 $("#tnSave").onclick = act(async () => { await saveTunnel(); toast("Saved"); });
 $("#tnAccess").onchange = act(saveTunnel);
