@@ -3771,23 +3771,32 @@ PTYS = {}
 PTY_SCROLLBACK = 2_000_000
 
 
-def pty_start(project, agent_id, cols, rows):
-    """Run a terminal agent (e.g. Freebuff) in a pseudo-terminal; output streams to the UI as `pty` events. One session
-    per project and agent: opening it again reattaches."""
+def shell_allowed():
+    return bool(CONFIG["settings"].get("shellAccess"))
+
+
+def pty_start(project, agent_id, cols, rows, profile=None):
+    """Run a terminal agent (e.g. Freebuff), or the user's own shell (agent "shell", opt-in), in a pseudo-terminal; output
+    streams to the UI as `pty` events. One session per project and agent: opening it again reattaches."""
     import pty
     key = f"{agent_id}:{project}"
     cur = PTYS.get(key)
     if cur and cur["alive"]:
         pty_resize(key, cols, rows)
         return {"id": key, "reattached": True}
-    a = agent_by_id(agent_id)
-    if not a or a.get("kind") != "terminal":
-        raise ValueError("Not a terminal agent")
     env = tool_env()
-    exe = shutil.which(a["bin"], path=env["PATH"])
-    if not exe:
-        raise ValueError(f"{a['name']} isn't installed. Install it in Settings → Setup.")
-    argv = [exe] + [x.replace("{project}", project) for x in a["argv"][1:]]
+    if agent_id == "shell":
+        if not shell_allowed():
+            raise ValueError("Terminal access from other devices is off. Turn it on in Forge Studio: Settings → Web App.")
+        argv = [os.environ.get("SHELL") or shutil.which("bash") or "/bin/sh", "-i"]
+    else:
+        a = agent_by_id(agent_id)
+        if not a or a.get("kind") != "terminal":
+            raise ValueError("Not a terminal agent")
+        exe = shutil.which(a["bin"], path=env["PATH"])
+        if not exe:
+            raise ValueError(f"{a['name']} isn't installed. Install it in Settings → Setup.")
+        argv = [exe] + [x.replace("{project}", project) for x in a["argv"][1:]]
     env.update(TERM="xterm-256color", COLORTERM="truecolor", FORCE_COLOR="1")
     pid, fd = pty.fork()
     if pid == 0:  # child
@@ -3796,7 +3805,7 @@ def pty_start(project, agent_id, cols, rows):
             os.execvpe(argv[0], argv, env)
         finally:
             os._exit(127)
-    rec = {"id": key, "pid": pid, "fd": fd, "project": project, "agent": agent_id, "alive": True, "buf": bytearray(), "started": time.time()}
+    rec = {"id": key, "pid": pid, "fd": fd, "project": project, "agent": agent_id, "alive": True, "buf": bytearray(), "started": time.time(), "profile": profile}
     PTYS[key] = rec
     pty_resize(key, cols, rows)
 
@@ -3811,7 +3820,7 @@ def pty_start(project, agent_id, cols, rows):
             rec["buf"] += data
             if len(rec["buf"]) > PTY_SCROLLBACK:
                 del rec["buf"][:len(rec["buf"]) - PTY_SCROLLBACK]
-            emit({"type": "pty", "id": key, "data": base64.b64encode(data).decode()})
+            emit({"type": "pty", "id": key, "data": base64.b64encode(data).decode()}, profile=profile)
         rec["alive"] = False
         try:
             _, status = os.waitpid(pid, 0)
@@ -3822,7 +3831,7 @@ def pty_start(project, agent_id, cols, rows):
             os.close(fd)
         except OSError:
             pass
-        emit({"type": "pty_exit", "id": key, "code": rec.get("code")})
+        emit({"type": "pty_exit", "id": key, "code": rec.get("code")}, profile=profile)
     threading.Thread(target=reader, daemon=True).start()
     return {"id": key, "reattached": False}
 
@@ -3849,10 +3858,19 @@ def pty_input(key, data):
 def pty_kill(key):
     rec = PTYS.get(key)
     if rec and rec["alive"]:
+        shell = rec.get("agent") == "shell"
         try:
-            os.kill(rec["pid"], signal.SIGTERM)
-        except ProcessLookupError:
+            (os.killpg if shell else os.kill)(rec["pid"], signal.SIGHUP if shell else signal.SIGTERM)  # a shell is the session leader
+        except (ProcessLookupError, PermissionError):
             pass
+        if shell:  # interactive shells can survive a hang-up while a child runs: make sure nothing is left behind
+            def force():
+                if rec["alive"]:
+                    try:
+                        os.killpg(rec["pid"], signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+            threading.Timer(2.0, force).start()
 
 
 def open_in_terminal(argv, cwd):
@@ -3949,7 +3967,7 @@ def tunnel_info():
 def web_access_info():
     on = bool(LAN["server"])
     return {"lan": on, "url": f"http://{lan_ip()}:{PORT + 1}/#token={TOKEN}" if on else None, "local": f"{ORIGIN}/#token={TOKEN}",
-            "tunnel": tunnel_info()}
+            "tunnel": tunnel_info(), "shell": shell_allowed()}
 
 
 def tunnel_start():
@@ -4771,10 +4789,12 @@ class Handler(BaseHTTPRequestHandler):
             _jb_cache["t"] = 0
             save_config()
             return None
+        if path.startswith("/api/pty/") and ((b.get("agent") == "shell") or str(b.get("id") or "").startswith("shell:")) and not shell_allowed():
+            raise ValueError("Terminal access from other devices is off. Turn it on in Forge Studio: Settings → Web App.")
         if path == "/api/pty/start":
             if not project:
                 raise ValueError("Open a project first")
-            return pty_start(project, b.get("agent"), b.get("cols") or 100, b.get("rows") or 30)
+            return pty_start(project, b.get("agent"), b.get("cols") or 100, b.get("rows") or 30, profile=prof.pid if b.get("agent") == "shell" else None)
         if path == "/api/pty/input":
             pty_input(b.get("id"), b.get("data") or "")
             return None
@@ -4857,6 +4877,13 @@ class Handler(BaseHTTPRequestHandler):
                 stop_lan()
             CONFIG["settings"]["lan"] = bool(b.get("enabled"))
             save_config()
+            return web_access_info()
+        if path == "/api/shell-access":
+            CONFIG["settings"]["shellAccess"] = bool(b.get("enabled"))
+            save_config()
+            if not b.get("enabled"):
+                for k in [k for k in PTYS if k.startswith("shell:")]:
+                    pty_kill(k)
             return web_access_info()
         if path == "/api/tunnel":
             t = dict(CONFIG["settings"].get("tunnel") or {})

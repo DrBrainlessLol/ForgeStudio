@@ -1550,6 +1550,7 @@ $("#lanToggle").onchange = act(async () => { S.web = await api("/api/web-access"
 // ---- Cloudflare Tunnel + phone pairing
 function renderTunnel() {
   const t = S.web?.tunnel; if (!t) return;
+  $("#shellToggle").checked = !!S.web?.shell;
   if (document.activeElement !== $("#tnHost")) $("#tnHost").value = t.host || "";
   $("#tnAccess").checked = t.access;
   if (document.activeElement !== $("#tnCfId")) $("#tnCfId").value = t.cfId || "";
@@ -1573,6 +1574,7 @@ const saveTunnel = async () => {
   if ($("#tnCfSecret").value.trim()) body.cfSecret = $("#tnCfSecret").value.trim();
   S.web = { ...S.web, tunnel: await api("/api/tunnel", body) }; $("#tnToken").value = ""; $("#tnCfSecret").value = ""; renderTunnel();
 };
+$("#shellToggle").onchange = act(async () => { S.web = await api("/api/shell-access", { enabled: $("#shellToggle").checked }); renderTunnel(); });
 $("#tnSave").onclick = act(async () => { await saveTunnel(); toast("Saved"); });
 $("#tnAccess").onchange = act(saveTunnel);
 $("#tnRun").onclick = act(async () => {
