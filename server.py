@@ -19,6 +19,7 @@ import shlex
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -827,6 +828,310 @@ RISKY = [
 ]
 
 
+# ---------------------------------------------------------------- browser tools (CDP + WebFetch) for the built-in engine
+
+class _CDPSession:
+    """Minimal Chrome DevTools Protocol client. Pure Python stdlib WebSocket + CDP."""
+
+    def __init__(self, host, port, path):
+        self._sock = socket.create_connection((host, port), timeout=10)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self._sock.sendall(
+            f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\n"
+            f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n\r\n".encode()
+        )
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            buf += self._sock.recv(4096)
+        self._next_id = 1
+        self._pending    = {}
+        self._events     = []
+        self._send_lock  = threading.Lock()
+        self._state_lock = threading.Lock()
+        threading.Thread(target=self._reader, daemon=True).start()
+
+    def _ws_send(self, obj):
+        payload = json.dumps(obj).encode()
+        n, mask = len(payload), os.urandom(4)
+        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        if   n < 126:   hdr = bytes([0x81, 0x80 | n])
+        elif n < 65536: hdr = struct.pack(">BBH", 0x81, 0xFE, n)
+        else:           hdr = struct.pack(">BBQ", 0x81, 0xFF, n)
+        with self._send_lock:
+            self._sock.sendall(hdr + mask + masked)
+
+    def _ws_recv(self):
+        def read(n):
+            d = b""
+            while len(d) < n:
+                chunk = self._sock.recv(n - len(d))
+                if not chunk:
+                    raise ConnectionError("socket closed")
+                d += chunk
+            return d
+        h = read(2)
+        opcode, masked = h[0] & 0x0F, bool(h[1] & 0x80)
+        n = h[1] & 0x7F
+        if n == 126: n = struct.unpack(">H", read(2))[0]
+        elif n == 127: n = struct.unpack(">Q", read(8))[0]
+        mkey = read(4) if masked else b""
+        raw  = read(n)
+        return opcode, bytes(b ^ mkey[i % 4] for i, b in enumerate(raw)) if masked else raw
+
+    def _reader(self):
+        while True:
+            try:
+                opcode, payload = self._ws_recv()
+            except Exception:
+                break
+            if opcode == 8:
+                break
+            if opcode != 1:
+                continue
+            try:
+                msg = json.loads(payload.decode())
+            except Exception:
+                continue
+            with self._state_lock:
+                mid = msg.get("id")
+                if mid is not None and mid in self._pending:
+                    ev, box = self._pending.pop(mid)
+                    box.append(msg)
+                    ev.set()
+                else:
+                    self._events.append(msg)
+
+    def call(self, method, params=None, timeout=30):
+        with self._state_lock:
+            mid = self._next_id; self._next_id += 1
+            ev, box = threading.Event(), []
+            self._pending[mid] = (ev, box)
+        self._ws_send({"id": mid, "method": method, "params": params or {}})
+        if not ev.wait(timeout):
+            with self._state_lock: self._pending.pop(mid, None)
+            raise TimeoutError(f"CDP {method} timed out after {timeout}s")
+        return box[0].get("result", {})
+
+    def drain(self, method=None):
+        with self._state_lock:
+            evs, self._events = self._events[:], []
+        return [e for e in evs if method is None or e.get("method") == method]
+
+    def wait_event(self, method, timeout=10):
+        end = time.time() + timeout
+        while time.time() < end:
+            with self._state_lock:
+                for i, e in enumerate(self._events):
+                    if e.get("method") == method:
+                        self._events.pop(i)
+                        return e
+            time.sleep(0.05)
+        return None
+
+    def close(self):
+        try: self._sock.close()
+        except Exception: pass
+
+
+_BROWSER_SESSIONS = {}   # chat_id → {"proc", "cdp", "net_log"}
+_BROWSER_LOCK = threading.Lock()
+
+
+def _cdp_for(chat_id):
+    """Return (or create) the Chrome CDP session for this chat."""
+    chrome = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
+    if not chrome:
+        raise RuntimeError("Chrome/Chromium not found — install google-chrome or chromium")
+
+    with _BROWSER_LOCK:
+        sess = _BROWSER_SESSIONS.get(chat_id)
+        if sess and sess["proc"].poll() is None:
+            return sess
+        if sess:
+            try: sess["cdp"].close()
+            except Exception: pass
+            _BROWSER_SESSIONS.pop(chat_id, None)
+
+    # Bind to port 0 to get a free port, then release it and pass it to Chrome.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    udir = str(Path(tempfile.gettempdir()) / f"forge-chrome-{chat_id[:8]}")
+    proc = subprocess.Popen(
+        [chrome, "--headless=new", f"--remote-debugging-port={port}",
+         "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+         "--no-first-run", "--disable-default-apps", "--disable-extensions",
+         "--mute-audio", f"--user-data-dir={udir}", "about:blank"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    for _ in range(40):
+        try:
+            json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1).read())
+            break
+        except Exception:
+            time.sleep(0.25)
+    else:
+        proc.kill()
+        raise RuntimeError("Chrome did not start in time")
+
+    targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/json").read())
+    ws_path = urllib.parse.urlparse(targets[0]["webSocketDebuggerUrl"]).path
+    cdp = _CDPSession("127.0.0.1", port, ws_path)
+    cdp.call("Network.enable")
+    cdp.call("Page.enable")
+    cdp.call("DOM.enable")
+    cdp.call("Runtime.enable")
+
+    sess = {"proc": proc, "cdp": cdp, "net_log": []}
+    with _BROWSER_LOCK:
+        _BROWSER_SESSIONS[chat_id] = sess
+    return sess
+
+
+def _run_webfetch(inp):
+    url = (inp.get("url") or "").strip()
+    if not url:
+        return "url is required", True
+    method = (inp.get("method") or "GET").upper()
+    hdrs = {str(k): str(v) for k, v in (inp.get("headers") or {}).items()}
+    hdrs.setdefault("User-Agent", "Mozilla/5.0 (compatible; ForgeStudio)")
+    body = inp.get("body")
+    data = body.encode() if isinstance(body, str) else (body or None)
+    req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            ct  = resp.headers.get("content-type", "")
+            raw = resp.read(500_000)
+            if any(t in ct for t in ("text", "json", "xml", "javascript", "html")):
+                body_text = raw.decode("utf-8", errors="replace")
+            else:
+                body_text = f"[{len(raw)} bytes, {ct}]"
+            resp_hdrs = dict(resp.headers)
+            return f"HTTP {resp.status}\n{json.dumps(resp_hdrs)}\n\n{body_text[:20000]}", False
+    except urllib.error.HTTPError as e:
+        return f"HTTP {e.code} {e.reason}\n{e.read(5000).decode('utf-8', errors='replace')}", True
+    except Exception as e:
+        return f"{type(e).__name__}: {e}", True
+
+
+def _run_browser(chat_id, inp):
+    action = (inp.get("action") or "navigate").lower()
+
+    if action == "close":
+        with _BROWSER_LOCK:
+            sess = _BROWSER_SESSIONS.pop(chat_id, None)
+        if sess:
+            try: sess["cdp"].close()
+            except Exception: pass
+            try: sess["proc"].terminate()
+            except Exception: pass
+        return "Browser session closed.", False
+
+    try:
+        sess = _cdp_for(chat_id)
+    except Exception as e:
+        return f"Browser unavailable: {e}", True
+
+    cdp, net_log = sess["cdp"], sess["net_log"]
+
+    def collect_net(evs):
+        for e in evs:
+            m, p = e.get("method", ""), e.get("params", {})
+            if m == "Network.requestWillBeSent":
+                r = p.get("request", {})
+                net_log.append({"event": "request", "url": r.get("url"), "method": r.get("method")})
+            elif m == "Network.responseReceived":
+                r = p.get("response", {})
+                net_log.append({"event": "response", "url": r.get("url"), "status": r.get("status")})
+
+    try:
+        if action == "navigate":
+            url = (inp.get("url") or "").strip()
+            if not url:
+                return "url is required for navigate", True
+            cdp.drain()
+            net_log.clear()
+            cdp.call("Page.navigate", {"url": url}, timeout=30)
+            cdp.wait_event("Page.loadEventFired", timeout=15)
+            time.sleep(0.3)
+            collect_net(cdp.drain())
+            doc      = cdp.call("DOM.getDocument")
+            html_res = cdp.call("DOM.getOuterHTML", {"nodeId": doc.get("root", {}).get("nodeId", 1)})
+            title    = cdp.call("Runtime.evaluate", {"expression": "document.title"}).get("result", {}).get("value", "")
+            html     = html_res.get("outerHTML", "")[:15000]
+            return (f"Title: {title}\nURL: {url}\n\n"
+                    f"Network log:\n{json.dumps(net_log[-100:], indent=2)}\n\n"
+                    f"HTML:\n{html}"), False
+
+        if action == "click":
+            sel = inp.get("selector") or ""
+            doc  = cdp.call("DOM.getDocument")
+            node = cdp.call("DOM.querySelector", {"nodeId": doc.get("root", {}).get("nodeId", 1), "selector": sel})
+            nid  = node.get("nodeId")
+            if not nid:
+                return f"No element matches: {sel}", True
+            box     = cdp.call("DOM.getBoxModel", {"nodeId": nid})
+            content = box.get("model", {}).get("content", [])
+            if not content:
+                return f"Could not get box model for: {sel}", True
+            x, y = (content[0] + content[2]) / 2, (content[1] + content[5]) / 2
+            cdp.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1})
+            cdp.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1})
+            time.sleep(1.5)
+            new_nets = []
+            for e in cdp.drain():
+                m, p = e.get("method", ""), e.get("params", {})
+                if m == "Network.requestWillBeSent":
+                    r = p.get("request", {})
+                    entry = {"event": "request", "url": r.get("url"), "method": r.get("method")}
+                    new_nets.append(entry); net_log.append(entry)
+                elif m == "Network.responseReceived":
+                    r = p.get("response", {})
+                    entry = {"event": "response", "url": r.get("url"), "status": r.get("status")}
+                    new_nets.append(entry); net_log.append(entry)
+            return f"Clicked {sel!r}\nNew requests:\n{json.dumps(new_nets, indent=2)}", False
+
+        if action == "type":
+            sel  = inp.get("selector") or ""
+            text = inp.get("text") or ""
+            doc  = cdp.call("DOM.getDocument")
+            node = cdp.call("DOM.querySelector", {"nodeId": doc.get("root", {}).get("nodeId", 1), "selector": sel})
+            nid  = node.get("nodeId")
+            if not nid:
+                return f"No element matches: {sel}", True
+            box     = cdp.call("DOM.getBoxModel", {"nodeId": nid})
+            content = box.get("model", {}).get("content", [])
+            if content:
+                x, y = (content[0] + content[2]) / 2, (content[1] + content[5]) / 2
+                cdp.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1})
+                cdp.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1})
+            cdp.call("Input.insertText", {"text": text})
+            return f"Typed into {sel!r}", False
+
+        if action == "evaluate":
+            script = inp.get("script") or ""
+            result = cdp.call("Runtime.evaluate", {"expression": script, "returnByValue": True, "awaitPromise": True})
+            val = result.get("result", {})
+            if val.get("subtype") == "error":
+                return f"JS error: {val.get('description', '')}", True
+            v = val.get("value")
+            return (json.dumps(v) if v is not None else val.get("description", "undefined")), False
+
+        if action == "screenshot":
+            data = cdp.call("Page.captureScreenshot", {"format": "png"}).get("data", "")
+            return f"data:image/png;base64,{data}", False
+
+        if action == "network_log":
+            return json.dumps(net_log, indent=2), False
+
+        return f"Unknown Browser action: {action!r}", True
+
+    except Exception as e:
+        return f"Browser error: {type(e).__name__}: {e}", True
+
+
 def risk_hints(tool, inp, project):
     hints = []
     if tool == "Bash":
@@ -846,7 +1151,7 @@ def risk_hints(tool, inp, project):
             hints.append({"level": "caution", "text": "Changes a file outside this project"})
         if Path(path).exists() and tool == "Write":
             hints.append({"level": "info", "text": "Overwrites an existing file"})
-    if tool in ("WebFetch", "WebSearch"):
+    if tool in ("WebFetch", "WebSearch", "Browser"):
         hints.append({"level": "info", "text": "Accesses the internet"})
     return hints
 
@@ -1368,6 +1673,10 @@ class Run:
                                    capture_output=True, text=True, errors="replace", timeout=int(inp.get("timeout", 120)))
                 out = (r.stdout + r.stderr).strip()
                 return clip(out or "(no output)"), r.returncode != 0
+            if tool == "WebFetch":
+                return _run_webfetch(inp)
+            if tool == "Browser":
+                return _run_browser(self.cid, inp)
             return f"Unknown tool {tool}", True
         except subprocess.TimeoutExpired:
             return "Command timed out", True
@@ -1609,7 +1918,9 @@ def without_advisor(messages):
 
 
 BUILTIN_SYSTEM = ("You are a coding agent working inside the user's project directory. Use the tools to read, "
-                  "write and edit files and run shell commands. Keep replies concise. When you finish, briefly say what you did.")
+                  "write and edit files, run shell commands, fetch web pages (WebFetch), and control a headless "
+                  "browser (Browser — navigate, click, type, evaluate JS, capture network traffic, screenshot). "
+                  "Keep replies concise. When you finish, briefly say what you did.")
 _TOOL_DEFS = [
     ("Read", "Read a file. Optional offset/limit (line numbers).",
      {"type": "object", "properties": {"file_path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["file_path"]}),
@@ -1619,6 +1930,28 @@ _TOOL_DEFS = [
      {"type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["file_path", "old_string", "new_string"]}),
     ("Bash", "Run a shell command in the project directory and return its output.",
      {"type": "object", "properties": {"command": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["command"]}),
+    ("WebFetch", "Make an HTTP request and return the response. Good for fetching docs, APIs, or plain web pages (no JavaScript rendering).",
+     {"type": "object", "properties": {
+         "url": {"type": "string"},
+         "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"], "default": "GET"},
+         "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+         "body": {"type": "string"}
+     }, "required": ["url"]}),
+    ("Browser", ("Control a headless Chrome browser. The session persists across calls for the same chat. "
+                 "Actions: navigate (url) — load a page, return title + HTML + network log; "
+                 "click (selector) — click a CSS selector, return new network requests; "
+                 "type (selector, text) — type into a field; "
+                 "evaluate (script) — run JavaScript and return the result; "
+                 "screenshot — capture a PNG; "
+                 "network_log — return all recorded network requests; "
+                 "close — shut down the browser session."),
+     {"type": "object", "properties": {
+         "action": {"type": "string", "enum": ["navigate", "click", "type", "evaluate", "screenshot", "network_log", "close"]},
+         "url": {"type": "string"},
+         "selector": {"type": "string"},
+         "text": {"type": "string"},
+         "script": {"type": "string"}
+     }, "required": ["action"]}),
 ]
 ANTHROPIC_TOOLS = [{"name": n, "description": d, "input_schema": s} for n, d, s in _TOOL_DEFS]
 OPENAI_TOOLS = [{"type": "function", "function": {"name": n, "description": d, "parameters": s}} for n, d, s in _TOOL_DEFS]
@@ -3579,9 +3912,59 @@ def stop_lan():
         threading.Thread(target=srv.shutdown, daemon=True).start()
 
 
+# ---- Cloudflare Tunnel: reach this server from a phone anywhere through a hostname served by `cloudflared`
+# cloudflared connects to 127.0.0.1:PORT, so tunnel requests arrive from loopback with the public hostname in Host.
+# That makes the Host header the only thing telling them apart from the user's own browser: see _host_ok / bootstrap.
+HOST_RE = re.compile(r"(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+
+
+def tunnel_cfg():
+    t = CONFIG["settings"].get("tunnel") or {}
+    return {"host": (t.get("host") or "").lower(), "access": t.get("access") is not False, "token": t.get("token") or ""}
+
+
+def cloudflared_path():
+    return shutil.which("cloudflared", path=tool_env()["PATH"])
+
+
+def tunnel_proc():
+    for rec in PROCS.values():
+        if rec["kind"] == "tunnel" and rec["popen"].poll() is None:
+            return rec
+    return None
+
+
+def tunnel_info():
+    t = tunnel_cfg()
+    url = f"https://{t['host']}" if t["host"] else None
+    return {"host": t["host"], "access": t["access"], "hasToken": bool(t["token"]), "installed": bool(cloudflared_path()),
+            "running": bool(tunnel_proc()), "url": url,
+            "pair": f"forge://pair?url={urllib.parse.quote(url, safe='')}&token={TOKEN}" if url else None}
+
+
 def web_access_info():
     on = bool(LAN["server"])
-    return {"lan": on, "url": f"http://{lan_ip()}:{PORT + 1}/#token={TOKEN}" if on else None, "local": f"{ORIGIN}/#token={TOKEN}"}
+    return {"lan": on, "url": f"http://{lan_ip()}:{PORT + 1}/#token={TOKEN}" if on else None, "local": f"{ORIGIN}/#token={TOKEN}",
+            "tunnel": tunnel_info()}
+
+
+def tunnel_start():
+    exe, t = cloudflared_path(), tunnel_cfg()
+    if not exe:
+        raise ValueError("cloudflared isn't installed — get it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/")
+    if not t["token"]:
+        raise ValueError("Paste the tunnel token first (Cloudflare Zero Trust → Networks → Tunnels)")
+    if tunnel_proc():
+        return
+    # the token goes in the environment, not argv, so it doesn't show in `ps`
+    env = dict(tool_env(), TUNNEL_TOKEN=t["token"])
+    start_proc([exe, "tunnel", "--no-autoupdate", "run"], str(HOME), "tunnel", "", "Cloudflare Tunnel", env=env)
+
+
+def tunnel_stop():
+    rec = tunnel_proc()
+    if rec:
+        kill_proc(next(k for k, v in PROCS.items() if v is rec))
 
 
 # ---------------------------------------------------------------- code editor
@@ -4016,6 +4399,12 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
         if host in ("127.0.0.1", "localhost"):
             return True
+        t = tunnel_cfg()
+        if t["host"] and host.lower() == t["host"]:
+            # only cloudflared (on this machine) may speak for the tunnel hostname, and, unless switched off, only
+            # requests that passed Cloudflare Access (it stamps them with a signed assertion header)
+            return (self.client_address[0] in ("127.0.0.1", "::1") and not getattr(self.server, "lan", False)
+                    and (not t["access"] or bool(self.headers.get("Cf-Access-Jwt-Assertion"))))
         return getattr(self.server, "lan", False) and host == lan_ip()
 
     def _app_auth(self, qs):
@@ -4065,7 +4454,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/bootstrap":
             # Hand the app token to pages opened on this computer only: loopback socket, localhost Host
             # header, not the LAN listener, and a same-origin request (other websites can't read it).
-            local = self.client_address[0] in ("127.0.0.1", "::1") and not getattr(self.server, "lan", False)
+            local = (self.client_address[0] in ("127.0.0.1", "::1") and not getattr(self.server, "lan", False)
+                     and (self.headers.get("Host") or "").rsplit(":", 1)[0] in ("127.0.0.1", "localhost"))  # not via the tunnel
             same_origin = self.headers.get("Sec-Fetch-Site", "same-origin") == "same-origin"
             if local and same_origin:
                 return self._send(200, {"token": TOKEN})
@@ -4464,6 +4854,26 @@ class Handler(BaseHTTPRequestHandler):
             CONFIG["settings"]["lan"] = bool(b.get("enabled"))
             save_config()
             return web_access_info()
+        if path == "/api/tunnel":
+            t = dict(CONFIG["settings"].get("tunnel") or {})
+            if "host" in b:
+                h = (b["host"] or "").strip().lower().removeprefix("https://").strip("/")
+                if h and not HOST_RE.fullmatch(h):
+                    raise ValueError("Hostname like forge.example.com")
+                t["host"] = h
+            if "access" in b:
+                t["access"] = bool(b["access"])
+            if b.get("token") is not None:
+                t["token"] = b["token"].strip()
+            CONFIG["settings"]["tunnel"] = t
+            save_config()
+            return tunnel_info()
+        if path == "/api/tunnel/start":
+            tunnel_start()
+            return tunnel_info()
+        if path == "/api/tunnel/stop":
+            tunnel_stop()
+            return tunnel_info()
         if path == "/api/chat/select":
             if b.get("chat"):
                 prof.data["current"][project] = b["chat"]
