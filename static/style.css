@@ -1351,3 +1351,28 @@ html[data-density="compact"] .show-side { height: 24px; padding: 0 8px; }
 .pop-free small { color: var(--dim); font-size: .9em; }
 
 .draft-tag { font-style: normal; font-size: .72em; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; margin-right: 4px; }
+
+/* ---- tools from the phone app: sidebar group, system info, chat files */
+.side-tools { display: grid; gap: 2px; padding: 4px 6px 8px; }
+.side-tools button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; color: var(--text); padding: 7px 8px; border-radius: 8px; cursor: pointer; font: inherit; }
+.side-tools button:hover { background: var(--hover, color-mix(in srgb, var(--text) 8%, transparent)); }
+.sys-info { display: grid; gap: 7px; padding: 4px 10px 8px; }
+.sys-row { display: grid; grid-template-columns: 54px 1fr auto; align-items: center; gap: 8px; font-size: .85em; }
+.sys-row > span:first-child { color: var(--dim, #8a93a5); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sys-row b { font-weight: 500; font-size: .92em; }
+.sys-bar { height: 6px; border-radius: 4px; background: color-mix(in srgb, var(--text) 12%, transparent); overflow: hidden; }
+.sys-bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+dialog.chatfiles { width: min(860px, 94vw); height: min(680px, 88vh); padding: 0; display: none; flex-direction: column; }
+dialog.chatfiles[open] { display: flex; }
+.cf-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 8px; }
+.cf-head h3 { margin: 0; margin-right: auto; }
+.cf-head input, .cf-head select { max-width: 220px; }
+.cf-filters { display: flex; gap: 8px; padding: 4px 16px 10px; flex-wrap: wrap; }
+.cf-filters .chip.on { background: var(--accent-soft); color: var(--accent); }
+.cf-filters small { opacity: .7; margin-left: 4px; }
+.cf-body { overflow: auto; padding: 0 16px 16px; flex: 1; }
+.cf-body h4 { margin: 14px 0 8px; font-size: .78em; letter-spacing: .08em; text-transform: uppercase; color: var(--dim, #8a93a5); }
+.cf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.cf-grid a { display: block; text-decoration: none; color: inherit; }
+.cf-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; border: .5px solid var(--border, #262c38); background: var(--surface); }
+.cf-grid span { display: block; font-size: .75em; color: var(--dim, #8a93a5); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

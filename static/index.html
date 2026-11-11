@@ -95,8 +95,17 @@
     </nav>
     <div class="side-section"><span>Projects</span><button class="icon-btn" id="btnAdd" title="Add a project folder"><svg class="ic"><use href="#i-folder-plus"/></svg></button></div>
     <ul id="projList" class="source-list"></ul>
-    <details class="side-status">
+    <details class="side-status" id="sideTools">
+      <summary>Tools</summary>
+      <div class="side-tools">
+        <button id="btnChatFiles"><svg class="ic"><use href="#i-files"/></svg> Chat files</button>
+        <button id="btnShareChat"><svg class="ic"><use href="#i-download"/></svg> Share or export this chat</button>
+        <button id="btnLockPc" hidden><svg class="ic"><use href="#i-lock"/></svg> Lock this computer</button>
+      </div>
+    </details>
+    <details class="side-status" id="sideSystem">
       <summary>System</summary>
+      <div id="sysInfo" class="sys-info"></div>
       <div id="toolStatus"></div>
     </details>
   </aside>
@@ -544,6 +553,17 @@
 </dialog>
 
 <!-- ============ SETTINGS ============ -->
+<dialog id="dlgChatFiles" class="sheet chatfiles">
+  <div class="cf-head">
+    <h3>Chat files</h3>
+    <select id="cfProject"></select>
+    <input id="cfSearch" placeholder="Search by file name">
+    <button class="icon-btn" id="cfClose" title="Close"><svg class="ic"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="cf-filters" id="cfFilters"></div>
+  <div class="cf-body" id="cfBody"></div>
+</dialog>
+
 <dialog id="dlgSettings" class="settings">
   <div class="settings-win">
     <nav class="settings-nav" id="settingsNav">
@@ -754,5 +774,6 @@
 <div id="toasts"></div>
 <script src="app.js"></script>
 <script src="code.js"></script>
+<script src="tools.js"></script>
 </body>
 </html>

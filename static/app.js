@@ -325,6 +325,7 @@ function renderItem(it) {
     }
   } else if (it.k === "approval") el = renderApproval(it);
   else if (it.k === "meta") { el = document.createElement("div"); el.className = "meta" + (it.err ? " err" : ""); el.textContent = it.text; }
+  if (it.k === "user" || it.k === "text") attachMsgMenu(el, it);
   it.el = el;
   return el;
 }
