@@ -700,7 +700,22 @@
           <p>Open this link on your phone or another computer:</p>
           <div class="copyline"><input id="lanUrl" readonly class="mono grow"><button class="btn" id="lanCopy">Copy</button></div>
         </div>
-      </section>
+      
+        <h3>Phone app &amp; Cloudflare Tunnel</h3>
+        <p class="dim">Reach this computer from the Forge Mobile app anywhere, through a Cloudflare Tunnel. In Cloudflare Zero Trust create a tunnel, point a public hostname at <code>http://127.0.0.1:8765</code>, and protect that hostname with an Access policy.</p>
+        <div class="form-group">
+          <label class="form-row"><span>Public hostname</span><input id="tnHost" class="mono" placeholder="forge.example.com" autocomplete="off"></label>
+          <label class="form-row"><span>Tunnel token<br><small class="dim">from the tunnel's install command; stored on this computer</small></span><input id="tnToken" class="mono" type="password" placeholder="(unchanged)" autocomplete="off"></label>
+          <div class="form-row"><span>Only accept requests that passed Cloudflare Access<br><small class="dim">recommended: the tunnel is useless to anyone who can't sign in to Access</small></span><label class="switch"><input type="checkbox" id="tnAccess"><i></i></label></div>
+          <div class="form-row"><span id="tnStatus" class="dim"></span><span class="row"><button class="btn" id="tnSave">Save</button><button class="btn" id="tnRun">Start tunnel</button></span></div>
+        </div>
+        <div class="warnbox" id="tnWarn" hidden></div>
+        <div id="tnPair" hidden>
+          <p>Scan with the phone, or open the link on it. It contains your access token: treat it like a password.</p>
+          <div id="tnQr" style="background:#fff;padding:10px;border-radius:8px;width:max-content;max-width:100%"></div>
+          <div class="copyline"><input id="tnLink" readonly class="mono grow" type="password"><button class="btn" id="tnCopy">Copy link</button></div>
+        </div>
+            </section>
 
       <section data-sec="android" hidden>
         <h2>Android</h2>

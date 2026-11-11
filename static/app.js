@@ -1537,6 +1537,7 @@ function renderWeb() {
   $("#lanUrl").value = S.web?.url || "";
   $("#tokenView").value = TOKEN;
   $("#btnInstall").textContent = matchMedia("(display-mode: standalone)").matches ? "Installed" : "Install…";
+  renderTunnel();
 }
 $("#tokenReveal").onclick = () => { const i = $("#tokenView"); i.type = i.type === "password" ? "text" : "password"; };
 $("#tokenCopy").onclick = act(async () => { await navigator.clipboard.writeText(TOKEN); toast("Token copied — keep it secret"); });
@@ -1546,6 +1547,37 @@ $("#btnInstall").onclick = act(async () => {
   toast("Use the browser's menu → “Install Forge Studio…” (or “Add to Home screen” on a phone).");
 });
 $("#lanToggle").onchange = act(async () => { S.web = await api("/api/web-access", { enabled: $("#lanToggle").checked }); renderWeb(); });
+// ---- Cloudflare Tunnel + phone pairing
+function renderTunnel() {
+  const t = S.web?.tunnel; if (!t) return;
+  if (document.activeElement !== $("#tnHost")) $("#tnHost").value = t.host || "";
+  $("#tnAccess").checked = t.access;
+  $("#tnToken").placeholder = t.hasToken ? "(saved — type to replace)" : "paste the tunnel token";
+  $("#tnRun").textContent = t.running ? "Stop tunnel" : "Start tunnel";
+  $("#tnStatus").textContent = !t.installed ? "cloudflared isn't installed on this computer" : t.running ? "Tunnel running" + (t.host ? ` → https://${t.host}` : "") : "Tunnel stopped";
+  const w = $("#tnWarn");
+  w.hidden = t.access || !t.host;
+  w.textContent = "Without the Access check, anyone who finds https://" + t.host + " reaches the sign-in screen. Add an Access policy in Cloudflare and turn the check back on.";
+  $("#tnPair").hidden = !t.pair;
+  $("#tnLink").value = t.pair || "";
+  const box = $("#tnQr"); box.innerHTML = "";
+  if (t.pair) loadScript("vendor/qrcode/qrcode.js").then(() => { const q = qrcode(0, "M"); q.addData(t.pair); q.make(); box.innerHTML = q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); box.firstChild.style.cssText = "width:220px;height:220px;display:block"; }).catch(() => (box.textContent = "QR unavailable — copy the link instead"));
+}
+const loadScript = (src) => (loadScript[src] ??= new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = rej; document.head.append(s); }));
+const saveTunnel = async () => {
+  const body = { host: $("#tnHost").value.trim(), access: $("#tnAccess").checked };
+  if ($("#tnToken").value.trim()) body.token = $("#tnToken").value.trim();
+  S.web = { ...S.web, tunnel: await api("/api/tunnel", body) }; $("#tnToken").value = ""; renderTunnel();
+};
+$("#tnSave").onclick = act(async () => { await saveTunnel(); toast("Saved"); });
+$("#tnAccess").onchange = act(saveTunnel);
+$("#tnRun").onclick = act(async () => {
+  await saveTunnel();
+  S.web = { ...S.web, tunnel: await api(S.web.tunnel.running ? "/api/tunnel/stop" : "/api/tunnel/start", {}) };
+  setTimeout(act(async () => { S.web = await api("/api/web-access", { enabled: !!S.web.lan }); renderTunnel(); }), 1500);  // the process takes a moment to come up
+  renderTunnel();
+});
+$("#tnCopy").onclick = act(async () => { await navigator.clipboard.writeText($("#tnLink").value); toast("Pairing link copied — keep it secret"); });
 $("#lanCopy").onclick = act(async () => { await navigator.clipboard.writeText($("#lanUrl").value); toast("Link copied"); });
 $("#setStudioSave").onclick = act(async () => { await api("/api/settings", { studio_path: $("#setStudio").value.trim() || null }); await loadState(); toast("Saved"); });
 
