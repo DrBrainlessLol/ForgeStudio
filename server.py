@@ -2661,7 +2661,8 @@ def list_devices():
             attrs = dict(p.split(":", 1) for p in parts[2:] if ":" in p and "//" not in p)
             state = "no permissions" if "no permissions" in line else parts[1]
             out.append({"serial": parts[0], "state": state, "model": attrs.get("model", "").replace("_", " "),
-                        "emulator": parts[0].startswith("emulator-"), "wifi": ":" in parts[0]})
+                        "emulator": parts[0].startswith("emulator-"), "wifi": ":" in parts[0],
+                        "keep": (CONFIG["settings"].get("adbKeep") or {}).get(parts[0])})
     avds = []
     em = emulator_path()
     if em:
@@ -4046,6 +4047,115 @@ def unlock_screen():
     return bool(r and r.returncode == 0)
 
 
+# ---------------------------------------------------------------- emergency recovery
+# A phone that can no longer sign in (token changed, login lost) or reach a stuck tunnel can use a recovery PIN to get back
+# in. The endpoint answers without the app token, so it is guarded by the PIN itself, a lockout, and the same host / Cloudflare
+# Access checks as everything else.
+RECOVER = {"fails": deque(maxlen=20), "until": 0.0}
+RECOVER_TRIES, RECOVER_WINDOW, RECOVER_LOCK = 5, 900, 900
+
+
+def recovery_set():
+    return bool(CONFIG["settings"].get("recoveryPin"))
+
+
+def recover(ip, b):
+    now = time.time()
+    if now < RECOVER["until"]:
+        raise ValueError(f"Too many wrong PINs. Try again in {int(RECOVER['until'] - now) // 60 + 1} minutes.")
+    stored = CONFIG["settings"].get("recoveryPin")
+    if not stored:
+        raise ValueError("Emergency recovery isn't set up on this computer.")
+    if not check_pin(str(b.get("pin") or ""), stored):
+        RECOVER["fails"].append(now)
+        recent = [t for t in RECOVER["fails"] if now - t < RECOVER_WINDOW]
+        print(f"recovery: wrong PIN from {ip} ({len(recent)}/{RECOVER_TRIES})", flush=True)
+        if len(recent) >= RECOVER_TRIES:
+            RECOVER["until"] = now + RECOVER_LOCK
+            RECOVER["fails"].clear()
+            raise ValueError("Too many wrong PINs. Recovery is locked for 15 minutes.")
+        raise ValueError(f"Wrong recovery PIN. {RECOVER_TRIES - len(recent)} tries left.")
+    RECOVER["fails"].clear()
+    action = b.get("action") or "token"
+    print(f"recovery: {action} accepted for {ip}", flush=True)
+    if action == "token":
+        return {"token": TOKEN, "version": APP_VERSION}
+    if action == "status":
+        return {"version": APP_VERSION, "tunnel": tunnel_info()}
+    if action == "restart-tunnel":
+        tunnel_stop()
+        time.sleep(1.5)
+        tunnel_start()
+        return {"tunnel": tunnel_info()}
+    if action == "restart-server":
+        threading.Thread(target=restart_server, daemon=True).start()
+        return {"restarting": True}
+    raise ValueError("Unknown recovery action")
+
+
+TUNNEL_WATCH = {"want": False, "restarts": 0, "last": 0.0}
+
+
+def watchdog_once():
+    try:
+        if TUNNEL_WATCH["want"] and not tunnel_proc() and time.time() - TUNNEL_WATCH["last"] > 60:
+            TUNNEL_WATCH["last"] = time.time()
+            tunnel_start()
+            TUNNEL_WATCH["restarts"] += 1
+            print("watchdog: the tunnel had stopped, restarted it", flush=True)
+    except Exception as e:
+        print("watchdog tunnel:", e, flush=True)
+    try:
+        adb_keepalive()
+    except Exception as e:
+        print("watchdog adb:", e, flush=True)
+
+
+def watchdog():
+    """Keep what the user asked for running: restart a dead tunnel, reconnect kept wireless adb devices, drop expired ones."""
+    while True:
+        time.sleep(20)
+        watchdog_once()
+
+
+def adb_keepalive():
+    keep = CONFIG["settings"].get("adbKeep") or {}
+    if not keep:
+        return
+    now, changed = time.time(), False
+    online = {d["serial"] for d in list_devices().get("devices", []) if d["state"] == "device"}
+    for addr, k in list(keep.items()):
+        if k.get("until") and now > k["until"]:
+            adb("disconnect", addr, timeout=10)
+            keep.pop(addr)
+            changed = True
+            print(f"adb: temporary connection to {addr} ended", flush=True)
+        elif addr not in online:
+            adb("connect", addr, timeout=10)
+    if changed:
+        CONFIG["settings"]["adbKeep"] = keep
+        save_config()
+
+
+def adb_control():
+    return bool(CONFIG["settings"].get("adbControl"))
+
+
+def adb_shell_ok():
+    return bool(CONFIG["settings"].get("adbShell"))
+
+
+def device_ip(serial):
+    r = adb("shell", "ip", "-f", "inet", "addr", "show", "wlan0", serial=serial, timeout=15)
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/", r.stdout.decode(errors="replace"))
+    if not m:
+        raise ValueError("Couldn't find the device's Wi-Fi address. Connect it to Wi-Fi first.")
+    return m.group(1)
+
+
+ADB_GRANTABLE = {"android.permission.WRITE_SECURE_SETTINGS", "android.permission.POST_NOTIFICATIONS", "android.permission.RECORD_AUDIO"}
+
+
 LAN = {"server": None}
 
 
@@ -4112,7 +4222,8 @@ def tunnel_info():
 def web_access_info():
     on = bool(LAN["server"])
     return {"lan": on, "url": f"http://{lan_ip()}:{PORT + 1}/#token={TOKEN}" if on else None, "local": f"{ORIGIN}/#token={TOKEN}",
-            "tunnel": tunnel_info(), "shell": shell_allowed(),
+            "tunnel": tunnel_info(), "shell": shell_allowed(), "recovery": recovery_set(),
+            "adb": {"control": adb_control(), "shell": adb_shell_ok()},
             "lock": dict(lock_state(), unlock=bool(CONFIG["settings"].get("remoteUnlock")))}
 
 
@@ -4122,6 +4233,7 @@ def tunnel_start():
         raise ValueError("cloudflared isn't installed — get it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/")
     if not t["token"]:
         raise ValueError("Paste the tunnel token first (Cloudflare Zero Trust → Networks → Tunnels)")
+    TUNNEL_WATCH["want"] = True
     if tunnel_proc():
         return
     # the token goes in the environment, not argv, so it doesn't show in `ps`
@@ -4130,6 +4242,7 @@ def tunnel_start():
 
 
 def tunnel_stop():
+    TUNNEL_WATCH["want"] = False  # stopped on purpose: the watchdog must not bring it back
     rec = tunnel_proc()
     if rec:
         kill_proc(next(k for k, v in PROCS.items() if v is rec))
@@ -4796,6 +4909,14 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             return self._send(403, {"error": "bad host"})
         u = urlparse(self.path)
+        if u.path == "/api/recover":  # answers without the app token: guarded by the recovery PIN and a lockout instead
+            try:
+                b = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 4096)) or b"{}")
+                return self._send(200, recover(self.client_address[0], b))
+            except ValueError as e:
+                return self._send(401, {"error": str(e)})
+            except json.JSONDecodeError:
+                return self._send(400, {"error": "bad json"})
         if not self._app_auth(parse_qs(u.query)):
             return self._send(401, {"error": "unauthorized"})
         n = int(self.headers.get("Content-Length") or 0)
@@ -5031,6 +5152,74 @@ class Handler(BaseHTTPRequestHandler):
             CONFIG["settings"]["lan"] = bool(b.get("enabled"))
             save_config()
             return web_access_info()
+        remote = (self.headers.get("Host") or "").rsplit(":", 1)[0] not in ("127.0.0.1", "localhost")  # a phone, not this computer's own UI
+        if path == "/api/recovery-pin":
+            pin = str(b.get("pin") or "")
+            if pin and len(pin) < 6:
+                raise ValueError("Use at least 6 characters for the recovery PIN")
+            if pin:
+                CONFIG["settings"]["recoveryPin"] = hash_pin(pin)
+            else:
+                CONFIG["settings"].pop("recoveryPin", None)
+            save_config()
+            return web_access_info()
+        if path == "/api/adb-access":
+            for k, key in (("control", "adbControl"), ("shell", "adbShell")):
+                if k in b:
+                    CONFIG["settings"][key] = bool(b[k])
+            save_config()
+            return web_access_info()
+        if remote and path in ("/api/android/connect", "/api/android/tcpip", "/api/android/keep", "/api/android/disconnect", "/api/android/install", "/api/android/grant") and not adb_control():
+            raise ValueError("Controlling adb devices from the phone is off. Turn it on in Forge Studio: Settings → Web App → Android devices.")
+        if path == "/api/android/shell":
+            if remote and not adb_shell_ok():
+                raise ValueError("Running commands on devices from the phone is off. Turn it on in Forge Studio: Settings → Web App → Android devices.")
+            cmd = str(b.get("command") or "").strip()
+            if not cmd:
+                raise ValueError("Type a command")
+            r = adb("shell", cmd, serial=serial, timeout=40)
+            return {"output": (r.stdout + r.stderr).decode(errors="replace")[:200_000], "code": r.returncode}
+        if path == "/api/android/tcpip":
+            port = int(b.get("port") or 5555)
+            r = adb("tcpip", str(port), serial=serial, timeout=20)
+            time.sleep(2.0)
+            ip = device_ip(serial)
+            c = adb("connect", f"{ip}:{port}", timeout=20)
+            return {"address": f"{ip}:{port}", "output": (r.stdout + r.stderr + c.stdout + c.stderr).decode(errors="replace").strip()}
+        if path == "/api/android/keep":
+            addr = str(b.get("address") or "").strip()
+            if not re.fullmatch(r"[\w.\-]+:\d{2,5}", addr):
+                raise ValueError("Address like 192.168.0.20:5555")
+            keep = CONFIG["settings"].setdefault("adbKeep", {})
+            hours = float(b.get("hours") or 0)
+            keep[addr] = {"until": time.time() + hours * 3600 if b.get("mode") == "hours" and hours > 0 else None, "since": time.time()}
+            save_config()
+            adb("connect", addr, timeout=20)
+            return {"keep": keep[addr]}
+        if path == "/api/android/disconnect":
+            addr = str(b.get("address") or "").strip()
+            (CONFIG["settings"].get("adbKeep") or {}).pop(addr, None)
+            save_config()
+            r = adb("disconnect", addr, timeout=15)
+            return {"output": (r.stdout + r.stderr).decode(errors="replace").strip()}
+        if path == "/api/android/install":
+            f = allowed_file(prof, b.get("path") or "")
+            if f.suffix.lower() != ".apk":
+                raise ValueError("Only .apk files can be installed")
+            r = adb("install", "-r", "-d", str(f), serial=serial, timeout=600)
+            out = (r.stdout + r.stderr).decode(errors="replace").strip()
+            if r.returncode != 0 or "Failure" in out:
+                raise ValueError(out.splitlines()[-1] if out else "Install failed")
+            return {"output": out}
+        if path == "/api/android/grant":
+            pkg, perm = str(b.get("package") or ""), str(b.get("permission") or "")
+            if pkg != "com.synatestudios.forgemobile" or perm not in ADB_GRANTABLE:
+                raise ValueError("That permission can't be granted from here")
+            r = adb("shell", "pm", "grant", pkg, perm, serial=serial, timeout=20)
+            out = (r.stdout + r.stderr).decode(errors="replace").strip()
+            if r.returncode != 0:
+                raise ValueError(out or "Grant failed")
+            return {"output": out or "granted"}
         if path == "/api/lock":
             if b.get("action") == "unlock":
                 unlock_screen()
@@ -5360,6 +5549,7 @@ def main():
             tunnel_start()
         except (ValueError, OSError) as e:
             print("Tunnel not started:", e, flush=True)
+    threading.Thread(target=watchdog, daemon=True).start()
     print(f"Forge Studio running at {ORIGIN}/#token={TOKEN}", flush=True)
     srv.serve_forever()
 
