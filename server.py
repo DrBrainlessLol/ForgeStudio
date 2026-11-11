@@ -22,6 +22,7 @@ import shlex
 import shutil
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -3970,11 +3971,11 @@ def shell_allowed():
     return bool(CONFIG["settings"].get("shellAccess"))
 
 
-def pty_start(project, agent_id, cols, rows, profile=None):
+def pty_start(project, agent_id, cols, rows, profile=None, session=None):
     """Run a terminal agent (e.g. Freebuff), or the user's own shell (agent "shell", opt-in), in a pseudo-terminal; output
     streams to the UI as `pty` events. One session per project and agent: opening it again reattaches."""
     import pty
-    key = f"{agent_id}:{project}"
+    key = f"{agent_id}:{project}" + (f"#{session}" if session and agent_id == "shell" else "")  # a shell can have several tabs
     cur = PTYS.get(key)
     if cur and cur["alive"]:
         pty_resize(key, cols, rows)
@@ -4156,6 +4157,45 @@ def unlock_screen():
     if lock_state().get("locked"):
         raise ValueError("This computer's lock screen didn't release. Unlock it at the keyboard.")
     return bool(r and r.returncode == 0)
+
+
+# ---------------------------------------------------------------- system information (CPU, memory, swap, disks)
+def _cpu_times():
+    with open("/proc/stat") as f:
+        v = [int(x) for x in f.readline().split()[1:]]
+    return sum(v), v[3] + (v[4] if len(v) > 4 else 0)  # total, idle (+iowait)
+
+
+def sysinfo():
+    out = {"cpu": None, "load": list(os.getloadavg()) if hasattr(os, "getloadavg") else [], "mem": None, "swap": None, "disks": [], "uptime": None}
+    try:
+        t1, i1 = _cpu_times()
+        time.sleep(0.25)
+        t2, i2 = _cpu_times()
+        out["cpu"] = round(100 * (1 - (i2 - i1) / max(1, t2 - t1)), 1)
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, _, rest = line.partition(":")
+                info[k] = int(rest.split()[0]) * 1024
+        out["mem"] = {"total": info["MemTotal"], "used": info["MemTotal"] - info.get("MemAvailable", info["MemFree"])}
+        out["swap"] = {"total": info.get("SwapTotal", 0), "used": info.get("SwapTotal", 0) - info.get("SwapFree", 0)}
+        out["uptime"] = float(open("/proc/uptime").read().split()[0])
+        seen = set()
+        for line in open("/proc/mounts"):
+            dev, mnt, fs = line.split()[:3]
+            if fs in ("ext4", "ext3", "btrfs", "xfs", "vfat", "exfat", "ntfs", "ntfs3", "zfs", "f2fs") and dev not in seen and "/snap/" not in mnt:
+                seen.add(dev)
+                u = shutil.disk_usage(mnt)
+                out["disks"].append({"name": dev, "mount": mnt, "used": u.used, "total": u.total})
+    except (OSError, KeyError, ValueError):
+        try:
+            u = shutil.disk_usage("/")
+            out["disks"] = [{"name": "/", "mount": "/", "used": u.used, "total": u.total}]
+        except OSError:
+            pass
+    out["disks"] = out["disks"][:6]
+    return out
 
 
 # ---------------------------------------------------------------- emergency recovery
@@ -4414,7 +4454,8 @@ def code_list(project, rel):
             continue
         try:
             is_dir = c.is_dir()
-            entries.append({"name": c.name, "dir": is_dir, "size": 0 if is_dir else c.stat().st_size, "link": c.is_symlink()})
+            st = c.stat()
+            entries.append({"name": c.name, "dir": is_dir, "size": 0 if is_dir else st.st_size, "link": c.is_symlink(), "mtime": int(st.st_mtime), "mode": stat.filemode(st.st_mode)})
         except OSError:
             continue
     entries.sort(key=lambda e: (not e["dir"], e["name"].lower()))
@@ -4920,6 +4961,8 @@ class Handler(BaseHTTPRequestHandler):
                                         "running": cid in RUNS and RUNS[cid].running()})
             if u.path.startswith("/api/lp/"):
                 return self.local_proxy(u, "GET")
+            if u.path == "/api/sysinfo":
+                return self._send(200, sysinfo())
             if u.path == "/api/notices":
                 since = float(qs.get("since", ["0"])[0] or 0)
                 items = [dict(n) for n in NOTICES if n["ts"] > since and (not n.get("profile") or n["profile"] == prof.pid)
@@ -5197,7 +5240,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/pty/start":
             if not project:
                 raise ValueError("Open a project first")
-            return pty_start(project, b.get("agent"), b.get("cols") or 100, b.get("rows") or 30, profile=prof.pid if b.get("agent") == "shell" else None)
+            return pty_start(project, b.get("agent"), b.get("cols") or 100, b.get("rows") or 30,
+                             profile=prof.pid if b.get("agent") == "shell" else None, session=re.sub(r"\D", "", str(b.get("session") or ""))[:3] or None)
+        if path == "/api/pty/list":  # the open shell tabs of this profile
+            mine = [(k, rec) for k, rec in PTYS.items() if rec.get("agent") == "shell" and rec.get("profile") == prof.pid and rec["alive"]]
+            return {"sessions": [{"id": k, "project": rec["project"], "started": rec["started"]} for k, rec in mine]}
         if path == "/api/pty/input":
             pty_input(b.get("id"), b.get("data") or "")
             return None
