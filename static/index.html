@@ -198,6 +198,7 @@
         <button data-dv="gradle"><svg class="ic"><use href="#i-terminal"/></svg> <span id="tasksTabLabel">Gradle</span></button>
         <button data-dv="devices"><svg class="ic"><use href="#i-wifi"/></svg> Devices</button>
         <button data-dv="crashlytics" id="crashlyticsTab"><svg class="ic"><use href="#i-alert"/></svg> Crashlytics</button>
+        <button data-dv="release"><svg class="ic"><use href="#i-external"/></svg> Release</button>
         <div class="spacer"></div>
         <span class="dim small-text" id="androidInfo"></span>
       </nav>
@@ -335,6 +336,11 @@
       <!-- crashlytics -->
       <div class="droid-view scroll" data-dv="crashlytics" hidden id="crashlyticsPane">
         <div id="crashlyticsContent"></div>
+      </div>
+
+      <!-- play store release -->
+      <div class="droid-view scroll" data-dv="release" hidden id="releasePane">
+        <div id="releaseContent"></div>
       </div>
 
       <!-- not an android project -->

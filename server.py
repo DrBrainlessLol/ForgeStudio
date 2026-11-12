@@ -3123,6 +3123,269 @@ class MainActivity : AppCompatActivity() {{
     return files
 
 
+# ---------------------------------------------------------------- play store / release
+
+def _ks_dir(prof):
+    d = prof.dir / "keystores"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def _find_keytool():
+    jdk = find_jdk()
+    if jdk:
+        kt = Path(jdk) / "bin" / "keytool"
+        if kt.exists():
+            return str(kt)
+    return shutil.which("keytool")
+
+
+def release_keystore_create(prof, alias, dname, store_pass, key_pass):
+    kt = _find_keytool()
+    if not kt:
+        raise ValueError("keytool not found — install a JDK in Settings → Setup")
+    ks_path = _ks_dir(prof) / f"{re.sub(r'[^a-zA-Z0-9_-]', '_', alias)}.jks"
+    r = subprocess.run(
+        [kt, "-genkeypair", "-v", "-keystore", str(ks_path), "-alias", alias,
+         "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
+         "-storepass", store_pass, "-keypass", key_pass, "-dname", dname, "-noprompt"],
+        capture_output=True, timeout=30)
+    if r.returncode != 0:
+        raise ValueError(f"keytool failed: {(r.stderr or r.stdout).decode(errors='replace')[:300]}")
+    ks_data = prof.data["settings"].setdefault("keystores", {})
+    ks_data[alias] = {"path": str(ks_path), "alias": alias, "storePass": store_pass, "keyPass": key_pass}
+    prof.save()
+    return {"path": str(ks_path), "alias": alias}
+
+
+def release_keystore_import(prof, alias, path, store_pass, key_pass):
+    p = Path(path).expanduser().resolve()
+    if not p.exists():
+        raise ValueError(f"File not found: {path}")
+    if p.suffix.lower() not in (".jks", ".keystore", ".p12"):
+        raise ValueError("Expected a .jks, .keystore or .p12 file")
+    ks_data = prof.data["settings"].setdefault("keystores", {})
+    ks_data[alias] = {"path": str(p), "alias": alias, "storePass": store_pass, "keyPass": key_pass}
+    prof.save()
+    return {"path": str(p), "alias": alias}
+
+
+def _module_build_file(project_path, module):
+    """Return the app module build.gradle.kts or build.gradle, trying common locations."""
+    base = Path(project_path)
+    candidates = [base / module, base / "app", base / "android" / "app", base]
+    for d in candidates:
+        for name in ("build.gradle.kts", "build.gradle"):
+            f = d / name
+            if f.exists():
+                text = f.read_text(errors="replace")
+                if "android.application" in text or "com.android.application" in text:
+                    return f
+    return None
+
+
+def release_status(prof, project_path, module):
+    ks_data = prof.data["settings"].get("keystores") or {}
+    play_data = prof.data["settings"].get("playAccounts") or {}
+    project_link = (prof.data["settings"].get("releaseLinks") or {}).get(project_path) or {}
+    alias = project_link.get("ksAlias")
+    ks = ks_data.get(alias) if alias else None
+    props_path = Path(project_path) / "keystore.properties"
+    build_file = _module_build_file(project_path, module or "app")
+    has_signing = False
+    is_kts = False
+    if build_file:
+        content = build_file.read_text(errors="replace")
+        has_signing = "signingConfigs" in content
+        is_kts = build_file.suffix == ".kts"
+    play_alias = project_link.get("playAlias")
+    play_sa = play_data.get(play_alias) if play_alias else None
+    all_ks = [{"alias": a, "path": v["path"]} for a, v in ks_data.items()]
+    all_play = [{"alias": a} for a in play_data]
+    return {
+        "keystore": {"alias": alias, "path": ks["path"]} if ks else None,
+        "allKeystores": all_ks,
+        "hasPropFile": props_path.exists(),
+        "hasSigning": has_signing,
+        "buildFile": str(build_file) if build_file else None,
+        "isKts": is_kts,
+        "playAccount": {"alias": play_alias} if play_sa else None,
+        "allPlayAccounts": all_play,
+    }
+
+
+def release_write_props(prof, project_path, ks_alias):
+    ks_data = prof.data["settings"].get("keystores") or {}
+    ks = ks_data.get(ks_alias)
+    if not ks:
+        raise ValueError(f"Keystore '{ks_alias}' not found — create or import one first")
+    props = (f"storeFile={ks['path']}\n"
+             f"storePassword={ks['storePass']}\n"
+             f"keyAlias={ks['alias']}\n"
+             f"keyPassword={ks['keyPass']}\n")
+    props_path = Path(project_path) / "keystore.properties"
+    props_path.write_text(props)
+    gi = Path(project_path) / ".gitignore"
+    if gi.exists():
+        text = gi.read_text(errors="replace")
+        if "keystore.properties" not in text:
+            gi.write_text(text.rstrip() + "\nkeystore.properties\n")
+    else:
+        gi.write_text("keystore.properties\n")
+    links = prof.data["settings"].setdefault("releaseLinks", {})
+    links.setdefault(project_path, {})["ksAlias"] = ks_alias
+    prof.save()
+    return {"propsPath": str(props_path)}
+
+
+def release_inject_signing(project_path, module):
+    """Inject signingConfigs into the module's build.gradle(.kts). Returns the snippet added."""
+    build_file = _module_build_file(project_path, module or "app")
+    if not build_file:
+        raise ValueError("Cannot find the app module's build.gradle — open the project first")
+    content = build_file.read_text(errors="replace")
+    if "signingConfigs" in content:
+        raise ValueError("signingConfigs already present in " + build_file.name + " — edit it manually to avoid conflicts")
+    is_kts = build_file.suffix == ".kts"
+    build_file.with_suffix(build_file.suffix + ".bak").write_text(content)
+    if is_kts:
+        props_header = (
+            '\nval keystorePropertiesFile = rootProject.file("keystore.properties")\n'
+            'val keystoreProperties = java.util.Properties().apply {\n'
+            '    if (keystorePropertiesFile.exists()) load(keystorePropertiesFile.reader())\n'
+            '}\n'
+        )
+        signing_block = (
+            '    signingConfigs {\n'
+            '        create("release") {\n'
+            '            storeFile = keystoreProperties["storeFile"]?.let { file(it as String) }\n'
+            '            storePassword = keystoreProperties["storePassword"] as String?\n'
+            '            keyAlias = keystoreProperties["keyAlias"] as String?\n'
+            '            keyPassword = keystoreProperties["keyPassword"] as String?\n'
+            '        }\n'
+            '    }\n'
+        )
+        release_signing = '            signingConfig = signingConfigs.getByName("release")\n'
+    else:
+        props_header = (
+            '\ndef keystorePropertiesFile = rootProject.file("keystore.properties")\n'
+            'def keystoreProperties = new Properties()\n'
+            'if (keystorePropertiesFile.exists()) {\n'
+            '    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))\n'
+            '}\n'
+        )
+        signing_block = (
+            '    signingConfigs {\n'
+            '        release {\n'
+            "            storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null\n"
+            "            storePassword keystoreProperties['storePassword']\n"
+            "            keyAlias keystoreProperties['keyAlias']\n"
+            "            keyPassword keystoreProperties['keyPassword']\n"
+            '        }\n'
+            '    }\n'
+        )
+        release_signing = '            signingConfig signingConfigs.release\n'
+    content = re.sub(r'\n(android\s*\{)', props_header + r'\n\1', content, count=1)
+    content = re.sub(r'(\n\s*buildTypes\s*\{)', '\n' + signing_block + r'\1', content, count=1)
+    content = re.sub(r'(\n\s*release\s*\{)', r'\1\n' + release_signing, content, count=1)
+    build_file.write_text(content)
+    return {"buildFile": str(build_file), "backedUpAs": str(build_file.with_suffix(build_file.suffix + ".bak"))}
+
+
+def _play_token(sa, scope="https://www.googleapis.com/auth/androidpublisher"):
+    """Get OAuth2 token for Google Play API — reuses Firebase JWT machinery but with androidpublisher scope."""
+    email = sa["client_email"]
+    cache_key = f"{email}:{scope}"
+    cached = _fb_token_cache.get(cache_key)
+    if cached and cached[1] > time.time() + 60:
+        return cached[0]
+    now = int(time.time())
+    header = _fb_b64url(json.dumps({"alg": "RS256", "typ": "JWT"}, separators=(",", ":")))
+    payload = _fb_b64url(json.dumps({
+        "iss": sa["client_email"], "scope": scope,
+        "aud": "https://oauth2.googleapis.com/token",
+        "exp": now + 3600, "iat": now,
+    }, separators=(",", ":")))
+    fd, keyfile = tempfile.mkstemp(suffix=".pem")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(sa["private_key"])
+        r = subprocess.run(["openssl", "dgst", "-sha256", "-sign", keyfile],
+                           input=f"{header}.{payload}".encode(), capture_output=True, timeout=5)
+        if r.returncode != 0:
+            raise ValueError(f"JWT signing failed: {r.stderr.decode(errors='replace')[:200]}")
+        jwt = f"{header}.{payload}.{_fb_b64url(r.stdout)}"
+    finally:
+        try:
+            os.unlink(keyfile)
+        except OSError:
+            pass
+    data = urllib.parse.urlencode({"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": jwt}).encode()
+    req = urllib.request.Request("https://oauth2.googleapis.com/token", data=data,
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            resp = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise ValueError(f"Play auth failed: {e.read().decode(errors='replace')[:300]}")
+    token, exp = resp["access_token"], time.time() + resp.get("expires_in", 3600)
+    _fb_token_cache[cache_key] = (token, exp)
+    return token
+
+
+def playstore_upload(sa, aab_path, package_name, track, what_is_new):
+    """Upload a signed AAB to the Play Store via the Google Play Developer API v3."""
+    token = _play_token(sa)
+    base = f"https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{package_name}"
+
+    def _play_req(method, url, body=None, ctype="application/json"):
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url, data=data,
+                                     headers={"Authorization": f"Bearer {token}", "Content-Type": ctype}, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            raise ValueError(f"Play API error ({e.code}): {e.read().decode(errors='replace')[:400]}")
+
+    edit = _play_req("POST", f"{base}/edits", {})
+    edit_id = edit["id"]
+
+    aab_size = Path(aab_path).stat().st_size
+    upload_url_init = (f"https://www.googleapis.com/upload/androidpublisher/v3/applications/{package_name}"
+                       f"/edits/{edit_id}/bundles?uploadType=resumable")
+    init_req = urllib.request.Request(
+        upload_url_init, data=b"",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream",
+                 "X-Upload-Content-Type": "application/octet-stream",
+                 "X-Upload-Content-Length": str(aab_size)}, method="POST")
+    try:
+        with urllib.request.urlopen(init_req, timeout=30) as r:
+            upload_url = r.getheader("Location")
+    except urllib.error.HTTPError as e:
+        raise ValueError(f"Upload init failed ({e.code}): {e.read().decode(errors='replace')[:300]}")
+    if not upload_url:
+        raise ValueError("Play API did not return a resumable upload URL")
+
+    with open(aab_path, "rb") as f:
+        aab_data = f.read()
+    upload_req = urllib.request.Request(
+        upload_url, data=aab_data,
+        headers={"Content-Type": "application/octet-stream", "Content-Length": str(aab_size)}, method="PUT")
+    try:
+        with urllib.request.urlopen(upload_req, timeout=120) as r:
+            bundle = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise ValueError(f"AAB upload failed ({e.code}): {e.read().decode(errors='replace')[:300]}")
+
+    version_code = bundle.get("versionCode")
+    track_body = {"releases": [{"versionCodes": [str(version_code)], "status": "completed",
+                                 "releaseNotes": [{"language": "en-US", "text": what_is_new or ""}]}]}
+    _play_req("PUT", f"{base}/edits/{edit_id}/tracks/{track}", track_body)
+    _play_req("POST", f"{base}/edits/{edit_id}:commit", None)
+    return {"versionCode": version_code, "track": track}
+
+
 # ---------------------------------------------------------------- firebase / crashlytics
 
 _fb_token_cache = {}  # client_email → (token, expires_at)
@@ -5129,6 +5392,10 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/firebase/crashes":
                 p = project_root(qs.get("project", [""])[0])
                 return self._send(200, firebase_crashes(prof, str(p)))
+            if u.path == "/api/release/status":
+                p = project_root(qs.get("project", [""])[0])
+                mod = qs.get("module", ["app"])[0]
+                return self._send(200, release_status(prof, str(p), mod))
             if u.path == "/api/android/outputs":  # the APKs / bundles a build produced, newest first
                 root = project_root(qs.get("project", [""])[0])
                 found = []
@@ -5698,6 +5965,67 @@ class Handler(BaseHTTPRequestHandler):
                 links.pop(b["project"], None)
             prof.save()
             return None
+        # ---- play store / release
+        if path == "/api/release/keystore/create":
+            alias = (b.get("alias") or "release").strip()
+            cn = b.get("cn", "Unknown").strip() or "Unknown"
+            ou = b.get("ou", "").strip()
+            o  = b.get("o",  "").strip()
+            l  = b.get("l",  "").strip()
+            st = b.get("st", "").strip()
+            c  = b.get("c",  "").strip() or "US"
+            dname = f"CN={cn}" + (f", OU={ou}" if ou else "") + (f", O={o}" if o else "") + \
+                    (f", L={l}" if l else "") + (f", ST={st}" if st else "") + f", C={c}"
+            return release_keystore_create(prof, alias, dname,
+                                           b.get("storePass", ""), b.get("keyPass", ""))
+        if path == "/api/release/keystore/import":
+            return release_keystore_import(prof, (b.get("alias") or "release").strip(),
+                                           b.get("path", ""), b.get("storePass", ""), b.get("keyPass", ""))
+        if path == "/api/release/keystore/link":
+            links = prof.data["settings"].setdefault("releaseLinks", {})
+            links.setdefault(project, {})["ksAlias"] = b.get("alias")
+            prof.save()
+            return None
+        if path == "/api/release/props":
+            return release_write_props(prof, project, b.get("alias") or
+                                       ((prof.data["settings"].get("releaseLinks") or {}).get(project) or {}).get("ksAlias", ""))
+        if path == "/api/release/inject":
+            return release_inject_signing(project, b.get("module") or "app")
+        if path == "/api/release/play/connect":
+            try:
+                sa = json.loads(b.get("serviceAccount", "{}")) if isinstance(b.get("serviceAccount"), str) else (b.get("serviceAccount") or {})
+            except (json.JSONDecodeError, TypeError):
+                raise ValueError("Not valid JSON")
+            if not sa:
+                plays = prof.data["settings"].get("playAccounts") or {}
+                link = (prof.data["settings"].get("releaseLinks") or {}).get(project) or {}
+                plays.pop(link.get("playAlias", ""), None)
+                prof.save()
+                return None
+            for k in ("client_email", "private_key", "project_id"):
+                if k not in sa:
+                    raise ValueError(f"Service account JSON is missing '{k}'")
+            _play_token(sa)  # validate
+            play_alias = (b.get("alias") or sa.get("client_email", "play").split("@")[0]).strip()
+            plays = prof.data["settings"].setdefault("playAccounts", {})
+            plays[play_alias] = sa
+            links = prof.data["settings"].setdefault("releaseLinks", {})
+            links.setdefault(project, {})["playAlias"] = play_alias
+            prof.save()
+            return {"alias": play_alias}
+        if path == "/api/release/play/upload":
+            plays = prof.data["settings"].get("playAccounts") or {}
+            link = (prof.data["settings"].get("releaseLinks") or {}).get(project) or {}
+            sa = plays.get(link.get("playAlias"))
+            if not sa:
+                raise ValueError("No Play Store account connected for this project")
+            aab_path = b.get("aabPath", "")
+            if not aab_path or not Path(aab_path).exists():
+                raise ValueError("AAB file not found — build a release first")
+            pkg = b.get("packageName") or ""
+            if not pkg:
+                raise ValueError("Package name is required")
+            return playstore_upload(sa, aab_path, pkg, b.get("track", "internal"), b.get("whatIsNew", ""))
         # ---- android
         if path == "/api/android/studio":
             studio = find_studio()

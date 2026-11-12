@@ -1834,6 +1834,184 @@ async function loadToolchain() {
       row("New apps use", `AGP ${S.sdk.agp} · Gradle ${S.sdk.gradleVersion} · Kotlin ${S.sdk.kotlin}`) + row("adb", t.adb);
   } catch {}
 }
+// ---- play store / release
+
+async function loadRelease() {
+  const pane = $("#releaseContent");
+  if (!pane) return;
+  const p = S.cur, mod = $("#moduleSel").value || "app";
+  pane.innerHTML = `<div class="dim small-text" style="padding:1rem">Loading…</div>`;
+  try {
+    const st = await api(`/api/release/status?project=${encodeURIComponent(p)}&module=${encodeURIComponent(mod)}`);
+    renderRelease(pane, st, p, mod);
+  } catch (e) {
+    pane.innerHTML = `<div class="warnbox" style="margin:1rem">${esc(e.message)}</div>`;
+  }
+}
+
+function renderRelease(pane, st, project, mod) {
+  const section = (title, body) => `<div class="group" style="margin:1rem">${title ? `<h3>${title}</h3>` : ""}${body}</div>`;
+  const badge = (ok, label) => `<span class="chip ${ok ? "" : "dim"}" style="pointer-events:none">${ok ? "✓" : "○"} ${label}</span>`;
+  let html = `<div style="padding:.25rem 1rem .5rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+    ${badge(!!st.keystore, "Keystore")} ${badge(st.hasPropFile, "keystore.properties")} ${badge(st.hasSigning, "Signing config")}
+  </div>`;
+
+  if (!st.keystore) {
+    const ksOpts = st.allKeystores.map((k) => `<option value="${esc(k.alias)}">${esc(k.alias)} (${esc(k.path.split("/").pop())})</option>`).join("");
+    html += section("Step 1 — Keystore",
+      (ksOpts ? `<p class="dim small-text">Link an existing keystore:</p>
+        <div class="row" style="margin-bottom:.75rem">
+          <select id="rlKsLink" class="grow">${ksOpts}</select>
+          <button class="btn" id="btnRlKsLink">Link</button>
+        </div><p class="dim small-text">Or create a new one:</p>` : `<p class="dim small-text">Create a release keystore. You only need to do this once — the keystore is reused for all future releases of this app.</p>`) +
+      `<div class="row wrap" style="gap:.5rem">
+        <input id="rlCn" class="grow" placeholder="Your Name or Company (CN)" style="min-width:160px">
+        <input id="rlCountry" placeholder="Country code (C)" style="width:80px" value="US">
+      </div>
+      <div class="row wrap" style="gap:.5rem;margin-top:.5rem">
+        <input id="rlStorePass" type="password" class="grow" placeholder="Keystore password (min 6 chars)" style="min-width:140px">
+        <input id="rlKeyPass" type="password" class="grow" placeholder="Key password" style="min-width:140px">
+      </div>
+      <div class="row" style="margin-top:.5rem">
+        <button class="btn primary" id="btnRlKsCreate">Create keystore</button>
+        <span class="dim small-text" id="rlKsErr" style="margin-left:.5rem"></span>
+      </div>`
+    );
+  } else {
+    html += section("Step 1 — Keystore",
+      `<div class="kv"><div><span class="dim">Alias</span><span class="mono">${esc(st.keystore.alias)}</span></div>
+       <div><span class="dim">File</span><span class="mono small-text">${esc(st.keystore.path)}</span></div></div>
+       <div class="row" style="margin-top:.5rem"><button class="btn small plain" id="btnRlKsChange">Change keystore</button></div>`
+    );
+  }
+
+  if (st.keystore) {
+    html += section("Step 2 — Signing config",
+      (!st.hasPropFile
+        ? `<p class="dim small-text">Write <code>keystore.properties</code> into the project root (auto-added to .gitignore) so Gradle can find the keystore.</p>
+           <button class="btn primary" id="btnRlWriteProps">Write keystore.properties</button>`
+        : `<p class="dim small-text" style="margin-bottom:.5rem">✓ keystore.properties exists.</p>`) +
+      (!st.hasSigning
+        ? `<p class="dim small-text" style="margin-top:.5rem">Auto-inject <code>signingConfigs</code> into <code>${esc(st.buildFile ? st.buildFile.split("/").pop() : "build.gradle.kts")}</code> (a .bak backup is made first).</p>
+           <button class="btn" id="btnRlInject" ${!st.hasPropFile ? "disabled" : ""}>Inject signing config</button>
+           <span class="dim small-text" id="rlInjectErr" style="margin-left:.5rem"></span>`
+        : `<p class="dim small-text">✓ Signing config present in ${esc(st.buildFile ? st.buildFile.split("/").pop() : "build.gradle")}.</p>`)
+    );
+  }
+
+  if (st.keystore && st.hasPropFile && st.hasSigning) {
+    html += section("Step 3 — Build release AAB",
+      `<p class="dim small-text">Build a signed AAB ready for the Play Store. Uses the variant selector in the run bar (set to <b>release</b>).</p>
+       <button class="btn primary" id="btnRlBuild">${ic("package")} Build release AAB</button>`
+    );
+  }
+
+  if (st.keystore && st.hasSigning) {
+    if (!st.playAccount) {
+      html += section("Step 4 — Upload to Play Store",
+        `<p class="dim small-text">Paste a Google service account JSON with the <b>Release Manager</b> role in Play Console (Console → Setup → API access → Create service account).</p>
+         <textarea id="rlPlaySa" rows="4" class="mono" style="width:100%;resize:vertical;font-size:11px" placeholder='{"type":"service_account","project_id":"…"}'></textarea>
+         <div class="row" style="margin-top:.5rem">
+           <button class="btn" id="btnRlPlayConnect">Connect Play Console</button>
+           <span class="dim small-text" id="rlPlayErr" style="margin-left:.5rem"></span>
+         </div>`
+      );
+    } else {
+      const aabOpts = `<option value="internal">Internal testing</option><option value="alpha">Closed testing (alpha)</option><option value="beta">Open testing (beta)</option><option value="production">Production</option>`;
+      html += section("Step 4 — Upload to Play Store",
+        `<div class="kv" style="margin-bottom:.75rem"><div><span class="dim">Account</span><span class="mono">${esc(st.playAccount.alias)}</span></div></div>
+         <div class="row wrap" style="gap:.5rem;margin-bottom:.5rem">
+           <select id="rlTrack" style="width:160px">${aabOpts}</select>
+           <input id="rlPkg" class="grow" placeholder="Package name (e.g. com.example.myapp)">
+         </div>
+         <textarea id="rlNotes" rows="3" style="width:100%;resize:vertical" placeholder="What's new in this release? (en-US)"></textarea>
+         <div class="row" style="margin-top:.5rem">
+           <input id="rlAabPath" class="grow mono small-text" placeholder="Path to signed .aab (leave empty to pick from last build)">
+           <button class="btn primary" id="btnRlUpload">${ic("package")} Upload to Play</button>
+           <span class="dim small-text" id="rlUploadStatus" style="margin-left:.5rem"></span>
+         </div>
+         <div class="row" style="margin-top:.25rem"><button class="btn small plain" id="btnRlPlayDisconnect">Disconnect Play account</button></div>`
+      );
+    }
+  }
+
+  pane.innerHTML = html;
+
+  if ($("#btnRlKsLink")) {
+    $("#btnRlKsLink").onclick = act(async () => {
+      await api("/api/release/keystore/link", { project, alias: $("#rlKsLink").value });
+      loadRelease();
+    });
+  }
+  if ($("#btnRlKsCreate")) {
+    $("#btnRlKsCreate").onclick = act(async () => {
+      const sp = $("#rlStorePass").value, kp = $("#rlKeyPass").value;
+      if (sp.length < 6) { $("#rlKsErr").textContent = "Keystore password must be at least 6 characters"; return; }
+      if (!kp) { $("#rlKsErr").textContent = "Enter a key password"; return; }
+      $("#rlKsErr").textContent = "Creating…";
+      try {
+        await api("/api/release/keystore/create", { project, cn: $("#rlCn").value || "Unknown", c: $("#rlCountry").value || "US", storePass: sp, keyPass: kp });
+        await api("/api/release/keystore/link", { project, alias: "release" });
+        loadRelease();
+      } catch (e) { $("#rlKsErr").textContent = e.message; }
+    });
+  }
+  if ($("#btnRlKsChange")) {
+    $("#btnRlKsChange").onclick = act(async () => {
+      await api("/api/release/keystore/link", { project, alias: null });
+      loadRelease();
+    });
+  }
+  if ($("#btnRlWriteProps")) {
+    $("#btnRlWriteProps").onclick = act(async () => { await api("/api/release/props", { project }); loadRelease(); });
+  }
+  if ($("#btnRlInject")) {
+    $("#btnRlInject").onclick = act(async () => {
+      try { await api("/api/release/inject", { project, module: mod }); loadRelease(); }
+      catch (e) { $("#rlInjectErr").textContent = e.message; }
+    });
+  }
+  if ($("#btnRlBuild")) {
+    $("#btnRlBuild").onclick = act(() => {
+      $("#variantSel").value = "Release";
+      setDroidView("build");
+      return gradleTask(`:${mod}:bundleRelease`);
+    });
+  }
+  if ($("#btnRlPlayConnect")) {
+    $("#btnRlPlayConnect").onclick = act(async () => {
+      try {
+        const raw = $("#rlPlaySa").value.trim();
+        await api("/api/release/play/connect", { project, serviceAccount: JSON.parse(raw) });
+        loadRelease();
+      } catch (e) { $("#rlPlayErr").textContent = e.message; }
+    });
+  }
+  if ($("#btnRlUpload")) {
+    $("#btnRlUpload").onclick = act(async () => {
+      const statusEl = $("#rlUploadStatus");
+      statusEl.textContent = "Uploading…";
+      try {
+        const aabPath = $("#rlAabPath").value.trim();
+        const result = await api("/api/release/play/upload", {
+          project,
+          packageName: $("#rlPkg").value.trim(),
+          track: $("#rlTrack").value,
+          whatIsNew: $("#rlNotes").value.trim(),
+          aabPath: aabPath || undefined,
+        });
+        statusEl.textContent = `✓ Uploaded versionCode ${result.versionCode} to ${result.track}`;
+      } catch (e) { statusEl.textContent = e.message; }
+    });
+  }
+  if ($("#btnRlPlayDisconnect")) {
+    $("#btnRlPlayDisconnect").onclick = act(async () => {
+      await api("/api/release/play/connect", { project, serviceAccount: null });
+      loadRelease();
+    });
+  }
+}
+
 // ---- firebase / crashlytics
 async function loadCrashlytics() {
   const pane = $("#crashlyticsContent");
@@ -2709,7 +2887,7 @@ $("#btnRestart").onclick = act(async () => {
   if (isFlutter()) return api("/api/flutter/reload", { project: S.cur, full: true });
   needDevice(); if (!appId()) throw new Error("No applicationId found"); await api("/api/android/restart", { project: S.cur, serial: serial(), applicationId: appId() }); });
 $("#btnBuild").onclick = act(() => isFlutter() ? flutterTask(`build ${flutterBuildTarget()} --${variant()}`) : gradleTask(`:${$("#moduleSel").value || "app"}:assemble${variant()}`));
-$$("#droidTabs button").forEach((b) => (b.onclick = () => { setDroidView(b.dataset.dv); if (b.dataset.dv === "crashlytics") loadCrashlytics(); }));
+$$("#droidTabs button").forEach((b) => (b.onclick = () => { setDroidView(b.dataset.dv); if (b.dataset.dv === "crashlytics") loadCrashlytics(); if (b.dataset.dv === "release") loadRelease(); }));
 $("#variantSel").onchange = () => { store.set(isFlutter() ? "fs:flmode" : "fs:variant", variant()); renderTaskChips(); renderFlutterRun(); };
 $("#moduleSel").onchange = renderTaskChips;
 $("#btnNewApp").onclick = () => (isFlutter() ? openNewFlutter() : openNewApp());
@@ -2861,6 +3039,7 @@ $("#dlgAdd").onclose = act(async () => {
   showTab(tab);
   setDroidView(store.get("fs:droidView", "run"));
   if (store.get("fs:droidView") === "crashlytics") loadCrashlytics();
+  if (store.get("fs:droidView") === "release") loadRelease();
   setMode(store.get("fs:mode", tab === "code" || store.get("fs:code", false) ? "editor" : "agent"), false);
   let start = (() => { try { return sessionStorage.getItem(pkey("cur")); } catch { return null; } })() || store.get(pkey("cur"), null);
   if (hashProject) {
