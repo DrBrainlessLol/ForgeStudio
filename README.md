@@ -11,6 +11,8 @@
 
 A lightweight desktop studio for AI coding agents, with built-in Android and Flutter tooling. Chat with Claude Code, Codex or any CLI agent (or the built-in API-key engine), then switch between three workspaces: **Agent** (chat, tasks and live website preview), **Editor** (a familiar IDE layout with explorer, search and Git) and **Android / Flutter** (Gradle or Flutter builds, hot reload, new-app wizards, live phone screen and logs). The agent comes with you in every mode.
 
+A companion Android app, [Forge Mobile](#forge-mobile-android), controls it from your phone, even when you are away from home (see [Remote access from your phone](#remote-access-from-your-phone)).
+
 It uses only the Python standard library and plain HTML/CSS/JS with no build step, and runs as a desktop web app (Chromium app window, installable PWA, optional LAN access).
 
 <p align="center">
@@ -32,6 +34,42 @@ It uses only the Python standard library and plain HTML/CSS/JS with no build ste
     <td><img src="docs/media/08-light-theme-home.png" alt="Light theme home screen with recent conversations and a live website preview"><br><sub>Light and dark themes, conversations grouped by project</sub></td>
   </tr>
 </table>
+
+## Contents
+
+- [How it's different from VS Code, Cursor, Android Studio and other IDEs](#how-its-different-from-vs-code-cursor-android-studio-and-other-ides)
+  - [Why it suits older and lower-end PCs](#why-it-suits-older-and-lower-end-pcs)
+  - [When another IDE is the better tool](#when-another-ide-is-the-better-tool)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Launch](#launch)
+- [Workspaces](#workspaces)
+- [Agents](#agents)
+- [Editor mode: code & Git](#editor-mode-code--git)
+- [Install / packaging](#install--packaging)
+- [Access on other devices](#access-on-other-devices)
+- [Remote access from your phone](#remote-access-from-your-phone)
+  - [Security switches (all off by default)](#security-switches)
+- [Forge Mobile (Android)](#forge-mobile-android)
+- [Lock and unlock the computer](#lock-and-unlock-the-computer)
+- [Emergency recovery](#emergency-recovery)
+- [Message drafts](#message-drafts)
+- [Share, export and chat files](#share-export-and-chat-files)
+- [Archives and APKs in chat](#archives-and-apks-in-chat)
+- [Wireless adb and Android devices](#wireless-adb-and-android-devices)
+- [Phone notifications](#phone-notifications)
+- [Web preview on the phone](#web-preview-on-the-phone)
+- [API reference](#api-reference)
+- [Permissions (Claude Code)](#permissions-claude-code)
+- [Chat](#chat)
+- [Composer](#composer)
+- [JetBrains IDEs](#jetbrains-ides)
+- [Plugins](#plugins)
+- [Profiles & settings](#profiles--settings)
+- [Preview](#preview)
+- [Notes](#notes)
+- [Support Forge Studio](#support-forge-studio)
+- [License](#license)
 
 ## How it's different from VS Code, Cursor, Android Studio and other IDEs
 
@@ -62,6 +100,8 @@ Most IDEs are built for **you** to write code, and add AI on top. Forge Studio i
 ### When another IDE is the better tool
 Forge's editor has syntax highlighting, search, quick open and Git, but **no language server**: no autocomplete, go-to-definition, refactorings or breakpoint debugger. If you write most code by hand or need those, keep your IDE and use Forge next to it. The [JetBrains plugin](#jetbrains-ides) and "Open in Forge Studio" from Android Studio make that easy, and with the IDE's MCP server on, the agent can even use your IDE's refactorings and inspections.
 
+<sub>[↑ Back to contents](#contents)</sub>
+
 ## Requirements
 - **Linux or macOS** with Python 3.8+ and a browser (Chrome / Chromium / Edge / Brave for an app window). macOS support is new and less tested than Linux; on Windows, use WSL2.
 - Everything else is optional and can be installed from **Settings → Setup**, which opens on first launch: one click per tool, the latest version from the official source, into your home folder (no admin password):
@@ -70,11 +110,15 @@ Forge's editor has syntax highlighting, search, quick open and Git, but **no lan
   - **Flutter:** the latest stable Flutter SDK (into `~/.local/flutter`, linked as `~/.local/bin/flutter`). Android targets also use the JDK and Android SDK above; Linux desktop targets need a few system packages (a copyable command is shown).
   - **Extras:** Node.js LTS (dev-server previews), [scrcpy](https://github.com/Genymobile/scrcpy) (live phone screen). Git comes from your system (a copyable command is shown).
 
+<sub>[↑ Back to contents](#contents)</sub>
+
 ## Install
 ```sh
 curl -fsSL https://raw.githubusercontent.com/DrBrainlessLol/ForgeStudio/main/install.sh | sh
 ```
 Works on Linux and macOS. Installs the latest release for your user into `~/.local` (no root, nothing else installed, checksum verified; on macOS it also adds **Forge Studio.app** to `~/Applications`), then start **Forge Studio** from your app menu or run `forge-studio`. It opens in the browser you already have. Run the same line again to update; add `-s -- --uninstall` after `sh` to remove it (your data is kept). Prefer a package? See [Install / packaging](#install--packaging).
+
+<sub>[↑ Back to contents](#contents)</sub>
 
 ## Launch
 - Desktop / app menu: **Forge Studio**
@@ -84,6 +128,8 @@ Works on Linux and macOS. Installs the latest release for your user into `~/.loc
 - Other devices: **Settings → Web App → Use from phones and other computers** (port 8766, needs the link with its token)
 
 > Forge Studio is an independent project. It works with Claude Code, Codex, Gemini CLI and other coding agents, but it is **not made by, affiliated with or endorsed by** Anthropic, OpenAI, Google or any other AI provider. Their names and products are trademarks of their respective owners.
+
+<sub>[↑ Back to contents](#contents)</sub>
 
 ## Workspaces
 Switch at the top of the window (or **Ctrl+1 / 2 / 3**). The agent chat comes with you in every mode; in Editor and Android it docks on the right and **Ctrl+J** (or the panel buttons) hides or shows it. Switch projects from the title bar.
@@ -106,6 +152,8 @@ Switch at the top of the window (or **Ctrl+1 / 2 / 3**). The agent chat comes wi
 
 The status bar shows the Git branch, the project, the agent's state and (in Android mode) the device and Gradle version.
 
+<sub>[↑ Back to contents](#contents)</sub>
+
 ## Agents
 | Agent | Support |
 |---|---|
@@ -122,6 +170,8 @@ The **Built-in** engine is what makes Forge Studio work standalone: pick it as t
 
 Each provider has an **API style** setting in Settings → Models & Keys; the presets set it for you.
 
+<sub>[↑ Back to contents](#contents)</sub>
+
 ## Editor mode: code & Git
 
 A built-in editor and Git client, no external tools bundled:
@@ -134,6 +184,8 @@ A built-in editor and Git client, no external tools bundled:
 - **Clone / New project**: from the sidebar ＋ (right-click) or the welcome tiles.
 - When the agent edits files in the open project, the editor reloads them live and the Git panel updates.
 
+<sub>[↑ Back to contents](#contents)</sub>
+
 ## Install / packaging
 The [one-line installer](#install) is the easiest way. Packages are also attached to every [GitHub release](https://github.com/DrBrainlessLol/ForgeStudio/releases) (built with `packaging/build.sh` into `packaging/dist/`):
 - **Debian / Ubuntu / Deepin:** `sudo apt install ./forge-studio_1.3.1_all.deb`
@@ -143,16 +195,173 @@ The [one-line installer](#install) is the easiest way. Packages are also attache
 
 See `packaging/README.md` for details.
 
+<sub>[↑ Back to contents](#contents)</sub>
+
 ## Access on other devices
 - The token lives in `~/.config/forge-studio/token`. Settings → Web App shows it and a copy button.
 - On this computer the page authorises itself automatically (loopback only), so a bookmark or the installed app opens straight to sign-in.
-- On another device: turn on network access in Settings → Web App, open the link it shows, or paste the token on the first screen. Give every profile a PIN first.
+- On another device on your network: turn on network access in Settings → Web App, open the link it shows, or paste the token on the first screen. Give every profile a PIN first.
+- From anywhere, or from the phone app: see [Remote access from your phone](#remote-access-from-your-phone).
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Remote access from your phone
+
+Forge Studio listens on `127.0.0.1` only. There are two ways to reach it from another device, and both ask for the app token (**Settings → Web App**) and a profile sign-in.
+
+**On the same network:** turn on network access in Settings → Web App and open the link it shows. Give every profile a PIN first.
+
+**From anywhere, with a Cloudflare Tunnel:**
+1. In Cloudflare Zero Trust, create a tunnel and point a public hostname (for example `forge.example.com`) at `http://127.0.0.1:8765`.
+2. Protect that hostname with an **Access** policy. A service token is the simplest way to let a phone in.
+3. Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) on the computer (it is not bundled).
+4. In **Settings → Web App → Phone app & Cloudflare Tunnel**, enter the hostname, the tunnel token and the Access service token, then press **Start tunnel**.
+
+What Forge Studio does for you:
+- Accepts the tunnel hostname only from `cloudflared` on this computer, and (by default) only for requests that passed Cloudflare Access.
+- Never hands the app token to a request that came through the tunnel (`/api/bootstrap` refuses them).
+- Starts the tunnel with the server, and a **watchdog** restarts it within about a minute if it stops (a tunnel you stopped on purpose stays stopped).
+- Shows a **pairing QR code** (`forge://pair?...`) carrying the address and both tokens, so the phone app needs nothing typed in.
+
+<a id="security-switches"></a>
+### Security switches (all off by default)
+Anything that gives a remote device more power than chatting is a separate switch in **Settings → Web App**. They can only be changed on the computer itself, never from the phone.
+
+| Switch | What it allows |
+|---|---|
+| Allow a terminal from the phone app | A shell on this computer, in the project folder (`/api/pty/*` with agent `shell`) |
+| Allow unlocking this computer from the phone app | Dismissing the lock screen (locking is always allowed) |
+| Let the phone connect, install apps and grant permissions on Android devices | Wireless adb pairing, keep-alive, APK installs and a short allow-list of permission grants |
+| Let the phone run shell commands on Android devices | Arbitrary `adb shell` commands |
+| Let the phone open any localhost port | The web preview for dev servers Forge did not start (ports Forge starts are always shareable) |
+| Only accept requests that passed Cloudflare Access | On by default; turn it off only if you protect the tunnel another way |
+
+Requests made on this computer's own UI are never blocked by these switches; they only apply to requests that arrive through the tunnel or the network.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Forge Mobile (Android)
+
+Forge Mobile is the companion Android app. It is a remote for the Forge Studio running on your computer, not a second copy of it: your code, agents and keys stay on the computer. It talks to the HTTP API listed in [API reference](#api-reference).
+
+- **Chat** with live streaming, the agent's thinking and every command as expandable steps, approval cards with **Allow / Deny**, attachments, voice typing and message drafts.
+- **Long-press a message** to copy, select, quote, share, edit and resend, or read aloud. **Share chat** exports the conversation as text or Markdown.
+- **Files:** a project file browser and editor, and a **Chat files** view of everything made, attached or screenshotted in a project's chats. Files the agent makes get **Download / Install** buttons.
+- **Git:** status, diffs, stage, commit, push and pull.
+- **Android tools:** build, run, Gradle quick tasks, built APKs and bundles you can install on the phone, emulators, a live device screen, and a filtered logcat with **Ask the agent to fix this**.
+- **Terminal:** a real terminal (xterm.js) with extra keys and a fingerprint or screen-lock check each time it opens. The server supports several shells per project (`session`).
+- **Web preview:** your dev server shown on the phone through the tunnel.
+- **Notifications** for approvals, finished runs, builds and crashes, with a battery-saver mode by default.
+- **Lock this computer**, **emergency recovery** and **wireless adb**, described below.
+- **Settings:** agent, model and provider, permission mode, reasoning, style, theme (light, dark, follow system), accent color, text size, and your own API-key providers.
+
+<a id="lock-and-unlock-the-computer"></a>
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Lock and unlock the computer
+
+Lock the screen from the phone while Forge Studio and your agents keep running, for the days you leave the laptop open and away. Locking works through Deepin's lock screen, `loginctl lock-session` or macOS display sleep. **Unlocking** uses `loginctl unlock-session` and needs the unlock switch above, plus the phone's fingerprint or screen lock. Pair it with your power setting's lid action ("turn off the screen", not "suspend") so closing the lid does not stop the server.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Emergency recovery
+
+Set a **recovery PIN** (6 or more characters) in Settings → Web App. If a phone loses its pairing or the connection breaks, the app's offline screen and **Settings → Emergency recovery** can use it to:
+- **Restore the connection** (get the app token again),
+- **Restart the tunnel**, or
+- **Restart Forge Studio**.
+
+`POST /api/recover` answers without the app token, so it is guarded by the PIN itself: five wrong tries lock it for 15 minutes, every attempt is logged, and the normal host and Cloudflare Access checks still apply. The app also remembers the computer's home-network address and tries it when the tunnel is down.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Message drafts
+
+Whatever is in the message box is saved per project and conversation as you type, and restored if Forge Studio is closed, crashes or you switch chats. Conversations with an unsent draft show a **Draft** tag. The desktop app keeps drafts in the browser's local storage; the phone app keeps them on the phone. Sending clears the draft.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Share, export and chat files
+
+- **Right-click a message** (desktop) for Copy, Quote in reply, Edit and resend, Send again, and Share or export.
+- **Share or export this chat** (sidebar → Tools) downloads the conversation as a Markdown file or copies it.
+- **Chat files** (sidebar → Tools) lists every file that belongs to a project's chats: made by the agent, attached by you, and the agent's screenshots. Filter by source, search by name, switch project. The list is built from the chat logs (`GET /api/chat/files`).
+- **System** in the sidebar shows live CPU, memory, swap and disk bars (`GET /api/sysinfo`).
+- **Lock this computer** (sidebar → Tools) appears where locking is supported.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Archives and APKs in chat
+
+Attach a **zip, tar, tar.gz, jar, aar or APK** and Forge Studio unpacks it next to the upload and tells the agent where, with a summary:
+- Unpacking refuses path traversal (`../`), symbolic links and zip bombs (file-count and size limits), and leaves nothing behind on failure.
+- For an **APK** it also reads the package name, version, SDK levels, permissions and ABIs with `aapt2` from your Android SDK build-tools, when installed.
+- The agent is pointed at the unpacked folder and can read, search and analyze the contents directly.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Wireless adb and Android devices
+
+**Settings → Android devices** (phone app) and the Android tools manage devices without a cable:
+- **Pair and connect** over Wi-Fi (Android 11+ Wireless debugging), with devices found on the network by mDNS.
+- **Keep connected** permanently or for 1, 4 or 12 hours: Forge Studio reconnects a dropped device on its own and ends temporary connections on time.
+- **Switch a USB device to a fixed Wi-Fi port** (`adb tcpip 5555`).
+- **Install an APK** (picked on the phone or built by Gradle) on a connected device.
+- **Run a command** on a device (`adb shell`), only with the shell switch on.
+- **Grant permissions** to the phone app itself from the computer, from a short allow-list.
+
+These actions from a phone need the Android switches in [Security switches](#security-switches).
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Phone notifications
+
+The phone app can alert you about approvals (with **Allow / Deny** buttons), finished runs, build results and app crashes. Two modes:
+- **Battery saver** (default): the phone asks the computer every 15 minutes what happened (`GET /api/notices`). No open connection and no ongoing notification.
+- **Instant:** keeps one connection open (a small "Forge connected" notification) with a long keep-alive to save battery.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Web preview on the phone
+
+Open a dev server running on the computer inside the phone app. Pages load through the authenticated tunnel at `/api/lp/<port>/...` (GET only: no form posts or websockets). Ports started by Forge's own **Preview** are always available; any other port needs the "open any localhost port" switch.
+
+<a id="api-reference"></a>
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## API reference
+
+The browser UI and the phone app use the same JSON API. Authenticate with the `X-Token` header (the app token) and `X-Login` (a profile sign-in). Endpoints added for remote use:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/tunnel`, `/api/tunnel/start`, `/api/tunnel/stop` | Configure and run the Cloudflare Tunnel |
+| `POST /api/recover` | Emergency recovery with the recovery PIN (no app token) |
+| `POST /api/recovery-pin` | Set or remove the recovery PIN |
+| `POST /api/shell-access`, `/api/unlock-access`, `/api/adb-access`, `/api/proxy-access` | The security switches |
+| `POST /api/pty/start`, `/api/pty/input`, `/api/pty/resize`, `/api/pty/buffer`, `/api/pty/kill`, `/api/pty/list` | Terminal sessions (agent `shell`; `session` opens extra tabs) |
+| `POST /api/lock` | `{"action": "lock"}` or `{"action": "unlock"}` |
+| `GET /api/notices?since=` | Events worth a notification since a time |
+| `GET /api/events?ping=` | Live event stream (keep-alive seconds, 10 to 90) |
+| `GET /api/chat/files?project=` | Files from a project's chats |
+| `GET /api/sysinfo` | CPU, memory, swap, disks, load, uptime |
+| `GET /api/lp/<port>/<path>` | Localhost preview proxy |
+| `GET /api/android/outputs?project=` | APK and bundle files a build produced |
+| `POST /api/android/connect`, `/tcpip`, `/keep`, `/disconnect`, `/install`, `/shell`, `/grant` | Wireless adb manager |
+| `POST /api/upload?name=` | Streamed upload (up to 2 GB); archives are unpacked and summarized |
+| `GET /api/file?path=` | A file inside a project or the profile's uploads, outputs and screenshots |
+
+<sub>[↑ Back to contents](#contents)</sub>
 
 ## Permissions (Claude Code)
 - **Ask before acting**: every non-read action becomes a card in the chat.
 - **Auto-edit, ask for commands**, **Auto**, **Full access — never ask**, **Plan only**.
 - Approval cards highlight risky actions: recursive deletes, sudo, force-push, `curl | sh`, installs, changes outside the project, and so on.
 - Each card offers **Allow**, **Always Allow** or **Deny**.
+
+<sub>[↑ Back to contents](#contents)</sub>
 
 ## Chat
 - Attach images and files with the clip, by pasting, or by drag & drop. Images go to the model directly; other files are passed as paths.
@@ -161,6 +370,8 @@ See `packaging/README.md` for details.
 - The sidebar lists every project with its recent conversations: running ones spin, finished ones get a dot. They're saved, so they're still there after a restart.
 - Tool cards expand to the full command and output, with copy buttons. Long chats show the latest 150 messages with **Show earlier messages** to load more, so they open quickly.
 - **Notifications**: a short chime and, when Forge Studio isn't the active window, a system notification when the agent needs approval, a task finishes, a Gradle build ends or your app crashes. Each can be turned off in Settings → General.
+
+<sub>[↑ Back to contents](#contents)</sub>
 
 ## Composer
 - **Agent / Plan / Chat** (Shift+Tab cycles): Plan researches and proposes without editing, then offers **Build this plan**; Chat answers with no tools at all.
@@ -174,14 +385,19 @@ See `packaging/README.md` for details.
 - **See what the agent sees:** screenshots it takes and images it reads appear under the step as thumbnails; click any image (yours or the agent's) to view it full size.
 - **Send / Stop** is one button. The UI is **Compact** by default (Settings → General → Density).
 
+<sub>[↑ Back to contents](#contents)</sub>
+
 ## JetBrains IDEs
 - **Plugin** (`jetbrains-plugin/`, IntelliJ-based IDEs 2024.3+): a **Forge Studio** tool window with the full app focused on the open project, and **Ask / Explain / Find and Fix Problems / Write Tests / Open Project** in the editor and project-view right-click menus (and Tools → Forge Studio). The code and its file/line reference land in Forge's message box. Build it with `cd jetbrains-plugin && ./gradlew buildPlugin` and install `build/distributions/*.zip` with **Settings → Plugins → ⚙ → Install Plugin from Disk**. It starts Forge Studio if it isn't running and reads the token from `~/.config/forge-studio/token`.
 - **IDE tools for the agent**: turn on the IDE's MCP server (**Settings → Tools → MCP Server**, 2025.2+). Forge Studio finds it and gives Claude Code the IDE's refactorings (safe rename across the project), inspections, symbol info and run configurations in Agent and Plan modes. Settings → General → JetBrains IDE switches it off or sets the address by hand.
+
+<sub>[↑ Back to contents](#contents)</sub>
 
 ## Plugins
 Settings → Plugins installs plugins from a folder or a Git URL, or scaffolds a new one. A plugin is a folder with `.claude-plugin/plugin.json` and optional `commands/`, `agents/`, `skills/`, `.mcp.json` and `README.md`. Claude Code loads them natively; the built-in engine supports commands, agents and skills (not MCP). They live in `~/.config/forge-studio/plugins`.
 Settings → Plugins also lists **Claude Code's own plugins** (installed with `/plugin` or synced from your claude.ai account), which are already active in Claude Code chats.
 
+<sub>[↑ Back to contents](#contents)</sub>
 
 ## Profiles & settings
 - **Profiles**: local (optional PIN) or Google sign-in (one-time Desktop-app OAuth client setup).
@@ -194,17 +410,25 @@ Settings → Plugins also lists **Claude Code's own plugins** (installed with `/
   - Web App.
   - Android.
 
+<sub>[↑ Back to contents](#contents)</sub>
+
 ## Preview
 - **Preview** (Agent mode): static server with live reload, or any dev command (URL auto-detected; npm, pnpm, Yarn or **Bun** picked from the project's lockfile, with dependencies installed on first run; edited CSS/JS always reloads fresh). Device sizes are available. For a Flutter project, **Start** runs the web app (`flutter run -d web-server`) with hot reload from Flutter mode.
 - **Processes** lists dev servers, Gradle and Flutter builds, Flutter runs, logcat, emulators and clones, with their logs.
 - Android Studio doesn't need to be open for anything in Android mode; **Smooth window** also opens scrcpy in its own window.
 
+<sub>[↑ Back to contents](#contents)</sub>
+
 ## Notes
 - Data lives in `~/.config/forge-studio/`: token, config, and `profiles/<id>/` with chats, uploads and keys (mode 600).
 - Server log: `~/.config/forge-studio/server.log`. Port: `FORGE_STUDIO_PORT` (default 8765; LAN uses +1).
 
+<sub>[↑ Back to contents](#contents)</sub>
+
 ## Support Forge Studio
 Forge Studio is free and open source, built and maintained by one developer. If it saves you time, you can support its development on **[Ko-fi](https://ko-fi.com/forgestudio)**. It helps keep new features, Android/Flutter tooling and fixes coming. Starring the repo, reporting bugs and sharing it help too.
+
+<sub>[↑ Back to contents](#contents)</sub>
 
 ## License
 Copyright © 2026 DrBrainlessLol.
@@ -214,3 +438,6 @@ Forge Studio is free software under the [GNU Affero General Public License v3.0]
 **Commercial licenses** are available for companies that want to use or embed Forge Studio without the AGPL's obligations. Open an issue or contact the maintainer on GitHub.
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). First-time contributors sign a short [Contributor License Agreement](CLA.md). Third-party material is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+<sub>[↑ Back to contents](#contents)</sub>
+
