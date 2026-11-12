@@ -242,7 +242,7 @@ Requests made on this computer's own UI are never blocked by these switches; the
 
 ## Forge Mobile (Android)
 
-**Current version: 0.3.0.** [Download the APK](https://github.com/DrBrainlessLol/ForgeStudio/releases/download/mobile-v0.3.0/ForgeMobile-0.3.0.apk) · [release notes and install steps](https://github.com/DrBrainlessLol/ForgeStudio/releases/tag/mobile-v0.3.0) · [all Forge Mobile releases](https://github.com/DrBrainlessLol/ForgeStudio/releases?q=mobile). Sideload it on Android 8.0 or newer. The app's source code is kept in a private repository.
+**Current version: 0.3.0.** [Download the APK](https://github.com/DrBrainlessLol/ForgeStudio/releases/download/mobile-v0.3.0/ForgeMobile-0.3.0.apk) · [release notes and install steps](docs/forge-mobile/RELEASE_NOTES.md) ([also on the release page](https://github.com/DrBrainlessLol/ForgeStudio/releases/tag/mobile-v0.3.0)) · [all Forge Mobile releases](https://github.com/DrBrainlessLol/ForgeStudio/releases?q=mobile). Sideload it on Android 8.0 or newer.
 
 Forge Mobile is the companion Android app. It is a remote for the Forge Studio running on your computer, not a second copy of it: your code, agents and keys stay on the computer. It talks to the HTTP API listed in [API reference](#api-reference).
 
