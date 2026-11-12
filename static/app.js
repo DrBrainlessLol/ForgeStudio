@@ -1834,6 +1834,92 @@ async function loadToolchain() {
       row("New apps use", `AGP ${S.sdk.agp} · Gradle ${S.sdk.gradleVersion} · Kotlin ${S.sdk.kotlin}`) + row("adb", t.adb);
   } catch {}
 }
+// ---- app size analyzer
+
+async function loadSize() {
+  const pane = $("#sizeContent");
+  if (!pane) return;
+  pane.innerHTML = `<div class="dim small-text" style="padding:1rem">Loading build outputs…</div>`;
+  try {
+    const data = await api(`/api/android/outputs?project=${encodeURIComponent(S.cur)}`);
+    const files = (data.files || []).filter((f) => f.kind === "apk" || f.kind === "aab");
+    if (!files.length) {
+      pane.innerHTML = `<div class="dim small-text" style="padding:1rem">No APK or AAB found — build the app first (Release tab → Build release AAB, or Run → Build APK).</div>`;
+      return;
+    }
+    renderSizePicker(pane, files);
+  } catch (e) {
+    pane.innerHTML = `<div class="warnbox" style="margin:1rem">${esc(e.message)}</div>`;
+  }
+}
+
+function renderSizePicker(pane, files) {
+  const opts = files.map((f) => `<option value="${esc(f.path)}">${esc(f.name)} (${esc(f.module || "app")} · ${esc(f.variant)} · ${_fmtBytes(f.size)})</option>`).join("");
+  pane.innerHTML = `<div class="group" style="margin:1rem">
+    <h3>Analyze build output</h3>
+    <div class="row" style="gap:.5rem">
+      <select id="sizeFileSel" class="grow">${opts}</select>
+      <button class="btn primary" id="btnSizeAnalyze">${ic("package")} Analyze</button>
+    </div>
+    <div id="sizeResult" style="margin-top:1rem"></div>
+  </div>`;
+  $("#sizeFileSel").value = files[0].path;
+  $("#btnSizeAnalyze").onclick = act(async () => {
+    const path = $("#sizeFileSel").value;
+    const result = $("#sizeResult");
+    result.innerHTML = `<div class="dim small-text">Analyzing…</div>`;
+    try {
+      const d = await api(`/api/size/analyze?path=${encodeURIComponent(path)}`);
+      renderSizeResult(result, d);
+    } catch (e) { result.innerHTML = `<div class="warnbox">${esc(e.message)}</div>`; }
+  });
+  $("#btnSizeAnalyze").click();
+}
+
+function _fmtBytes(b) {
+  if (b == null) return "?";
+  if (b < 1024) return b + " B";
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + " KB";
+  return (b / 1024 / 1024).toFixed(2) + " MB";
+}
+
+function renderSizeResult(container, d) {
+  const total = d.totalBytes || 0;
+  const dl = d.downloadBytes || total;
+  const bar = (size, tot) => {
+    const pct = tot ? Math.max(2, Math.round(size / tot * 100)) : 0;
+    return `<div style="height:6px;border-radius:3px;background:var(--bg3,#ddd);margin:3px 0"><div style="height:100%;border-radius:3px;background:var(--accent,#6c63ff);width:${pct}%"></div></div>`;
+  };
+  let html = `<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem">
+    <div><div class="dim small-text">Total size</div><div style="font-size:1.1rem;font-weight:700">${_fmtBytes(total)}</div></div>
+    ${dl !== total ? `<div><div class="dim small-text">Download size</div><div style="font-size:1.1rem;font-weight:700">${_fmtBytes(dl)}</div></div>` : ""}
+    ${d.packageName ? `<div><div class="dim small-text">Package</div><div class="mono small-text">${esc(d.packageName)}</div></div>` : ""}
+    ${!d.hasAnalyzer ? `<div class="dim small-text" style="font-size:11px;align-self:flex-end">Install Android SDK build-tools for a detailed breakdown</div>` : ""}
+  </div>`;
+  for (const cat of (d.categories || [])) {
+    const pct = total ? (cat.size / total * 100).toFixed(1) : 0;
+    html += `<div style="margin-bottom:.75rem">
+      <div class="row" style="gap:.5rem">
+        <span style="font-weight:600;font-size:13px">${esc(cat.name)}</span>
+        <span class="dim small-text">${_fmtBytes(cat.size)} (${pct}%)</span>
+      </div>
+      ${bar(cat.size, total)}
+      ${cat.files.length ? `<div style="margin-top:.25rem">${cat.files.map((f) =>
+        `<div class="dim small-text mono" style="font-size:11px;display:flex;justify-content:space-between;padding:1px 0">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">${esc(f.path)}</span>
+          <span style="flex-shrink:0;margin-left:.5rem">${_fmtBytes(f.compressedSize || f.size)}</span>
+        </div>`
+      ).join("")}</div>` : ""}
+    </div>`;
+  }
+  const askMsg = `The release ${d.isAab ? "AAB" : "APK"} for this Android project is ${_fmtBytes(total)}.\n\nSize breakdown:\n${(d.categories || []).map((c) => `- ${c.name}: ${_fmtBytes(c.size)} (${total ? (c.size / total * 100).toFixed(1) : 0}%)`).join("\n")}\n\nPlease suggest and implement changes to reduce the app size.`;
+  html += `<button class="btn primary" id="btnSizeAsk" style="margin-top:.5rem">${ic("bot")} Ask agent to reduce size</button>`;
+  container.innerHTML = html;
+  if ($("#btnSizeAsk")) {
+    $("#btnSizeAsk").onclick = () => { setMode("agent"); $("#input").value = askMsg; $("#input").focus(); };
+  }
+}
+
 // ---- github actions / CI
 
 async function loadCI() {
@@ -3001,7 +3087,7 @@ $("#btnRestart").onclick = act(async () => {
   if (isFlutter()) return api("/api/flutter/reload", { project: S.cur, full: true });
   needDevice(); if (!appId()) throw new Error("No applicationId found"); await api("/api/android/restart", { project: S.cur, serial: serial(), applicationId: appId() }); });
 $("#btnBuild").onclick = act(() => isFlutter() ? flutterTask(`build ${flutterBuildTarget()} --${variant()}`) : gradleTask(`:${$("#moduleSel").value || "app"}:assemble${variant()}`));
-$$("#droidTabs button").forEach((b) => (b.onclick = () => { setDroidView(b.dataset.dv); if (b.dataset.dv === "crashlytics") loadCrashlytics(); if (b.dataset.dv === "release") loadRelease(); if (b.dataset.dv === "ci") loadCI(); }));
+$$("#droidTabs button").forEach((b) => (b.onclick = () => { setDroidView(b.dataset.dv); if (b.dataset.dv === "crashlytics") loadCrashlytics(); if (b.dataset.dv === "release") loadRelease(); if (b.dataset.dv === "ci") loadCI(); if (b.dataset.dv === "size") loadSize(); }));
 $("#variantSel").onchange = () => { store.set(isFlutter() ? "fs:flmode" : "fs:variant", variant()); renderTaskChips(); renderFlutterRun(); };
 $("#moduleSel").onchange = renderTaskChips;
 $("#btnNewApp").onclick = () => (isFlutter() ? openNewFlutter() : openNewApp());
@@ -3155,6 +3241,7 @@ $("#dlgAdd").onclose = act(async () => {
   if (store.get("fs:droidView") === "crashlytics") loadCrashlytics();
   if (store.get("fs:droidView") === "release") loadRelease();
   if (store.get("fs:droidView") === "ci") loadCI();
+  if (store.get("fs:droidView") === "size") loadSize();
   setMode(store.get("fs:mode", tab === "code" || store.get("fs:code", false) ? "editor" : "agent"), false);
   let start = (() => { try { return sessionStorage.getItem(pkey("cur")); } catch { return null; } })() || store.get(pkey("cur"), null);
   if (hashProject) {

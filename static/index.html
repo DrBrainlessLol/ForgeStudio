@@ -200,6 +200,7 @@
         <button data-dv="crashlytics" id="crashlyticsTab"><svg class="ic"><use href="#i-alert"/></svg> Crashlytics</button>
         <button data-dv="release"><svg class="ic"><use href="#i-external"/></svg> Release</button>
         <button data-dv="ci"><svg class="ic"><use href="#i-activity"/></svg> CI</button>
+        <button data-dv="size"><svg class="ic"><use href="#i-package"/></svg> Size</button>
         <div class="spacer"></div>
         <span class="dim small-text" id="androidInfo"></span>
       </nav>
@@ -347,6 +348,11 @@
       <!-- github actions CI -->
       <div class="droid-view scroll" data-dv="ci" hidden id="ciPane">
         <div id="ciContent"></div>
+      </div>
+
+      <!-- app size analyzer -->
+      <div class="droid-view scroll" data-dv="size" hidden id="sizePane">
+        <div id="sizeContent"></div>
       </div>
 
       <!-- not an android project -->

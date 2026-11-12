@@ -3123,6 +3123,124 @@ class MainActivity : AppCompatActivity() {{
     return files
 
 
+# ---------------------------------------------------------------- app size analyzer
+
+def _apkanalyzer_path():
+    sdk = sdk_path()
+    if not sdk:
+        return None
+    bt = sdk / "build-tools"
+    if not bt.is_dir():
+        return None
+    versions = sorted([d for d in bt.iterdir() if d.is_dir()], key=lambda d: d.name, reverse=True)
+    for v in versions:
+        a = v / "apkanalyzer"
+        if a.exists():
+            return str(a)
+    return None
+
+
+def _apkanalyzer_run(analyzer, *args, timeout=30):
+    r = subprocess.run([analyzer, *args], capture_output=True, timeout=timeout, env=tool_env())
+    return r.stdout.decode(errors="replace").strip()
+
+
+def _zip_size_breakdown(file_path):
+    """Fallback: use zipfile to list contents when apkanalyzer isn't available."""
+    import zipfile
+    entries = []
+    try:
+        with zipfile.ZipFile(file_path) as zf:
+            for info in zf.infolist():
+                entries.append({
+                    "path": info.filename,
+                    "size": info.file_size,
+                    "compressedSize": info.compress_size,
+                })
+    except Exception as e:
+        raise ValueError(f"Could not read file: {e}")
+    return entries
+
+
+def analyze_app_size(file_path):
+    """Analyze an APK or AAB and return a size breakdown."""
+    p = Path(file_path)
+    if not p.exists():
+        raise ValueError(f"File not found: {file_path}")
+    is_aab = p.suffix.lower() == ".aab"
+    result = {"path": file_path, "name": p.name, "totalBytes": p.stat().st_size, "isAab": is_aab}
+    analyzer = _apkanalyzer_path()
+    entries = []
+    if analyzer:
+        try:
+            raw = _apkanalyzer_run(analyzer, "files", "list", file_path)
+            for line in raw.splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 4:
+                    try:
+                        entries.append({
+                            "path": parts[3].lstrip("/"),
+                            "size": int(parts[1]) if parts[1].lstrip("-").isdigit() else 0,
+                            "compressedSize": int(parts[2]) if parts[2].lstrip("-").isdigit() else 0,
+                        })
+                    except (ValueError, IndexError):
+                        pass
+            if not is_aab:
+                try:
+                    summary_raw = _apkanalyzer_run(analyzer, "apk", "summary", file_path)
+                    lines = summary_raw.splitlines()
+                    if lines:
+                        parts = lines[0].split("\t")
+                        if len(parts) >= 2:
+                            result["packageName"] = parts[0]
+                            result["versionName"] = parts[1] if len(parts) > 1 else ""
+                except Exception:
+                    pass
+                try:
+                    dl_size = _apkanalyzer_run(analyzer, "apk", "file-size", file_path)
+                    result["downloadBytes"] = int(dl_size) if dl_size.isdigit() else result["totalBytes"]
+                except Exception:
+                    result["downloadBytes"] = result["totalBytes"]
+        except Exception:
+            entries = _zip_size_breakdown(file_path)
+    else:
+        entries = _zip_size_breakdown(file_path)
+    categories = {}
+    for e in entries:
+        path = e["path"]
+        if path.startswith("classes") and path.endswith(".dex"):
+            cat = "DEX (code)"
+        elif path.startswith("res/") or path == "resources.arsc":
+            cat = "Resources"
+        elif path.startswith("assets/"):
+            cat = "Assets"
+        elif path.startswith("lib/") or path.endswith(".so"):
+            cat = "Native libs"
+        elif path.startswith("META-INF/"):
+            cat = "META-INF"
+        elif is_aab and (path.startswith("base/dex") or path.endswith(".dex")):
+            cat = "DEX (code)"
+        elif is_aab and path.startswith("base/res"):
+            cat = "Resources"
+        elif is_aab and path.startswith("base/assets"):
+            cat = "Assets"
+        elif is_aab and path.startswith("base/lib"):
+            cat = "Native libs"
+        else:
+            cat = "Other"
+        c = categories.setdefault(cat, {"name": cat, "size": 0, "compressedSize": 0, "files": []})
+        c["size"] += e["size"]
+        c["compressedSize"] += e["compressedSize"]
+        if e["size"] > 50_000:
+            c["files"].append({"path": e["path"], "size": e["size"], "compressedSize": e["compressedSize"]})
+    for c in categories.values():
+        c["files"].sort(key=lambda x: x["size"], reverse=True)
+        c["files"] = c["files"][:10]
+    result["categories"] = sorted(categories.values(), key=lambda x: x["size"], reverse=True)
+    result["hasAnalyzer"] = bool(analyzer)
+    return result
+
+
 # ---------------------------------------------------------------- github actions / CI
 
 def _gh_headers(token):
@@ -5522,6 +5640,11 @@ class Handler(BaseHTTPRequestHandler):
                 p = project_root(qs.get("project", [""])[0])
                 run_id = qs.get("run", [""])[0]
                 return self._send(200, ci_run_logs(prof, str(p), run_id))
+            if u.path == "/api/size/analyze":
+                file_path = qs.get("path", [""])[0]
+                if not file_path:
+                    return self._send(400, {"error": "path required"})
+                return self._send(200, analyze_app_size(file_path))
             if u.path == "/api/android/outputs":  # the APKs / bundles a build produced, newest first
                 root = project_root(qs.get("project", [""])[0])
                 found = []
