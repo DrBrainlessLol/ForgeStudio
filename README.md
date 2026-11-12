@@ -9,7 +9,7 @@
   <a href="https://ko-fi.com/forgestudio"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support Forge Studio on Ko-fi"></a>
 </p>
 
-A lightweight desktop studio for AI coding agents, with built-in Android and Flutter tooling. Chat with Claude Code, Codex or any CLI agent (or the built-in API-key engine), then switch between three workspaces: **Agent** (chat, tasks and live website preview), **Editor** (a familiar IDE layout with explorer, search and Git) and **Android / Flutter** (Gradle or Flutter builds, hot reload, new-app wizards, live phone screen and logs). The agent comes with you in every mode.
+A lightweight desktop studio for AI coding agents, with built-in Android and Flutter tooling. Chat with Claude Code, Codex or any CLI agent (or the built-in API-key engine), then switch between three workspaces: **Agent** (chat, tasks and live website preview), **Editor** (a familiar IDE layout with explorer, search and Git) and **Android / Flutter** (Gradle or Flutter builds, hot reload, new-app wizards, live phone screen and logs, Firebase Crashlytics, Play Store release, GitHub Actions CI and APK/AAB size analysis). The agent comes with you in every mode.
 
 A companion Android app, [Forge Mobile](#forge-mobile-android), controls it from your phone, even when you are away from home (see [Remote access from your phone](#remote-access-from-your-phone)). **[Download Forge Mobile 0.3.0 (APK)](https://github.com/DrBrainlessLol/ForgeStudio/releases/download/mobile-v0.3.0/ForgeMobile-0.3.0.apk)** · [release notes](https://github.com/DrBrainlessLol/ForgeStudio/releases/tag/mobile-v0.3.0).
 
@@ -59,6 +59,11 @@ It uses only the Python standard library and plain HTML/CSS/JS with no build ste
 - [Wireless adb and Android devices](#wireless-adb-and-android-devices)
 - [Phone notifications](#phone-notifications)
 - [Web preview on the phone](#web-preview-on-the-phone)
+- [Firebase Crashlytics](#firebase-crashlytics)
+- [Play Store release workflow](#play-store-release-workflow)
+- [GitHub Actions CI](#github-actions-ci)
+- [App size analyzer](#app-size-analyzer)
+- [Team mode](#team-mode)
 - [API reference](#api-reference)
 - [Permissions (Claude Code)](#permissions-claude-code)
 - [Chat](#chat)
@@ -83,9 +88,10 @@ Most IDEs are built for **you** to write code, and add AI on top. Forge Studio i
 | Memory (app itself) | **~40–70 MB** server + one browser tab | several processes, often 500 MB–1 GB+ | often 2–4 GB+; 8 GB RAM is the stated minimum for Android Studio |
 | Starts in | **~0.2 s** (server) | seconds | tens of seconds, plus indexing |
 | Which AI | Claude Code, Codex, Gemini CLI, Qwen, opencode, Aider, any CLI, or your own API key | mostly the vendor's own models/plans | vendor plugins |
-| Android | Gradle builds, live phone screen (up to 120 fps), logcat, crash → "Ask to fix", no Android Studio needed | extensions | full suite |
+| Android | Gradle builds, live screen (up to 120 fps), logcat, crash → "Ask to fix", Crashlytics, Play Store release, CI, size analyzer — no Android Studio needed | extensions | full suite |
 | Use from your phone or another PC | built in (LAN web app with a token) | remote extensions / tunnels | no |
-| Open source | AGPL-3.0, no account or telemetry | varies | partly |
+| Team / sharing | invite a guest via link; they watch and approve — no account needed | varies | no |
+| License | Proprietary, no telemetry | varies | partly |
 
 *Sizes and memory for other tools vary by version, extensions and project size. Forge Studio's numbers are measured on Linux with the 1.3.0 package; the built-in terminal (xterm.js) only loads when you open a terminal agent.*
 
@@ -135,12 +141,19 @@ Works on Linux and macOS. Installs the latest release for your user into `~/.loc
 Switch at the top of the window (or **Ctrl+1 / 2 / 3**). The agent chat comes with you in every mode; in Editor and Android it docks on the right and **Ctrl+J** (or the panel buttons) hides or shows it. Switch projects from the title bar.
 - **Agent**: projects and running/finished agent tasks on the left, the chat in the middle (a "What should we build?" home screen with suggestions when it's empty), and Preview / Processes on the right.
 - **Editor**: a familiar IDE layout. Explorer, search and source control on the left, tabbed code editor in the middle, the agent docked on the right.
-- **Android**: a run bar (module, debug/release, device, Run / Restart / Stop / Build), then **Run & Logcat** (screen mirror + app logcat), **Build** output, **Gradle** tasks and toolchain, and **Devices** (emulators, Wi-Fi pairing, port forwarding).
+- **Android**: a run bar (module, debug/release, device, Run / Restart / Stop / Build), then eight tabs:
+  - **Run & Logcat** — screen mirror + app logcat. App-only logcat with level/search filters, crash and ANR detection with **Ask to fix**, and **Ask** to send the visible log to the agent.
+  - **Build** — Gradle and Flutter build output with **Ask to fix** on failure.
+  - **Gradle** — run any Gradle or Flutter task, quick-task chips, add pub.dev packages, add Flutter platforms, toolchain info.
+  - **Devices** — emulators, Wi-Fi pairing, port forwarding.
+  - **Crashlytics** — connect Firebase with a service account key to pull production crashes into Forge. Each crash shows exception type, affected users, last seen date and an **Ask to fix** button that pre-fills the agent with full crash context.
+  - **Release** — end-to-end Play Store release pipeline: create or import a keystore (stored in your profile), write `keystore.properties`, auto-inject `signingConfigs` into `build.gradle(.kts)`, build a signed AAB, then upload to any Play Store track (internal / alpha / beta / production) with release notes — no browser required.
+  - **CI** — connect GitHub with a personal access token. Trigger any workflow by name, pick a branch or ref, watch recent run status (✓ / ✗ / ⟳), and on failure pull the log tail directly into an **Ask to fix** agent prompt.
+  - **Size** — after any build, pick an APK or AAB and get a breakdown by category (DEX, Resources, Assets, Native libs, META-INF, Other) with the top files per category and an **Ask agent to reduce size** shortcut. Uses `apkanalyzer` from your SDK build-tools when available, falls back to the standard Python `zipfile` module.
   - **New app** (Android or Flutter) creates a Compose or Views app with Kotlin DSL, a version catalog, Git and a real Gradle wrapper (AGP 9.4.1 with built-in Kotlin, Gradle 9.6, compileSdk = the newest installed platform).
   - Projects without `gradlew` get an **Add Gradle wrapper** button.
   - Gradle runs on a JDK it supports, picked automatically (e.g. JDK 17 or 21 for older Gradle versions even if Android Studio's bundled JDK is newer).
   - **Live screen**: the phone's display streams as H.264 from its hardware encoder (via your installed scrcpy) and is decoded in the browser, up to 120 fps. Click to tap, drag to swipe; screenshots are the fallback without scrcpy.
-  - App-only logcat with level/search filters, crash and ANR detection with **Ask to fix**, and **Ask** to send the visible log to the agent.
   - The tab only appears for Android Gradle and Flutter projects, and is labelled **Flutter** when a Flutter project is selected.
 - **Flutter** (the same workspace, for projects with a Flutter `pubspec.yaml`):
   - The device menu lists everything `flutter devices` sees (phones, emulators, Linux/macOS desktop, Chrome) plus a **Web server** device whose app opens in **Preview**.
@@ -329,6 +342,73 @@ The phone app can alert you about approvals (with **Allow / Deny** buttons), fin
 
 Open a dev server running on the computer inside the phone app. Pages load through the authenticated tunnel at `/api/lp/<port>/...` (GET only: no form posts or websockets). Ports started by Forge's own **Preview** are always available; any other port needs the "open any localhost port" switch.
 
+## Firebase Crashlytics
+
+Connect Firebase to pull production crashes directly into Forge. In the **Crashlytics** tab of the Android workspace:
+
+1. Paste a Firebase service account key JSON (Console → Project settings → Service accounts → Generate new private key). The key is stored locally in your profile — nothing leaves your machine.
+2. Pick which Firebase Android app maps to this project.
+3. Recent open crash groups appear as cards: exception type, crash count, affected users, last seen. Hit **Ask to fix** to pre-fill the agent with the full crash context.
+
+The integration uses Google's service account JWT flow with `openssl` for signing — no third-party Python packages required. Tokens are cached and auto-refreshed.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Play Store release workflow
+
+The **Release** tab walks you through the full pipeline:
+
+1. **Keystore** — create a new `.jks` release keystore via `keytool` (stored in your profile, not the project) or link an existing one. One keystore per app, reused for every release.
+2. **Signing config** — writes `keystore.properties` to the project root (auto-added to `.gitignore`), then auto-injects `signingConfigs` into `build.gradle.kts` or `build.gradle` with a `.bak` backup first.
+3. **Build release AAB** — one button runs `:app:bundleRelease` and shows output in the Build tab.
+4. **Upload to Play Store** — paste a Play Console service account JSON (Release Manager role), pick a track (internal / alpha / beta / production), add release notes, and upload. Uses the Google Play Developer API v3 — no browser required.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## GitHub Actions CI
+
+The **CI** tab connects to GitHub Actions with a personal access token (`repo` + `workflow` scopes):
+
+- Forge auto-detects the GitHub remote from the project's `.git/config`.
+- Trigger any active workflow by name, with a branch, tag or SHA.
+- Recent run history shows ✓ / ✗ / ⟳ status per workflow.
+- Failed runs have an **Ask to fix** button: Forge fetches the failed-job log zip, extracts the relevant tail, and pre-fills the agent input with the full error context.
+- Token stored per-profile; one token covers all projects from the same account.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## App size analyzer
+
+The **Size** tab lists every APK and AAB the last build produced. Pick one and Forge breaks down its contents:
+
+| Category | What's counted |
+|---|---|
+| DEX (code) | `.dex` files — compiled Kotlin/Java |
+| Resources | `res/` tree and `resources.arsc` |
+| Assets | `assets/` |
+| Native libs | `.so` files and `lib/` |
+| META-INF | Signing and manifest metadata |
+| Other | Everything else |
+
+Each category shows its share of the total with a bar chart and the top files by size. **Ask agent to reduce size** sends the full breakdown to the agent as a starting prompt.
+
+Uses `apkanalyzer` from your SDK build-tools when available; falls back to Python's standard `zipfile` module so it works without the SDK.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
+## Team mode
+
+Invite a collaborator to watch and approve agent actions without giving them full access. In **Settings → Team**:
+
+- **Owner** generates a 7-day invite link and shares it. Revoke any guest at any time.
+- **Guest** visits the link, enters a name, and joins with a read-only profile. No account or sign-up required.
+
+Guests can: watch agent runs live, approve or deny tool calls, view chat history, see builds, CI status and the Crashlytics tab.
+
+Guests cannot: change settings, start new agent runs, edit files, commit or push, access the terminal, create releases, or change keys and providers.
+
+<sub>[↑ Back to contents](#contents)</sub>
+
 <a id="api-reference"></a>
 
 <sub>[↑ Back to contents](#contents)</sub>
@@ -411,6 +491,7 @@ Settings → Plugins also lists **Claude Code's own plugins** (installed with `/
   - Models & Keys: your own Anthropic key, DeepSeek, OpenRouter, Kimi, GLM, Ollama, or custom.
   - Web App.
   - Android.
+  - Team: invite a guest collaborator via a 7-day link; view and revoke active guests.
 
 <sub>[↑ Back to contents](#contents)</sub>
 
@@ -428,18 +509,18 @@ Settings → Plugins also lists **Claude Code's own plugins** (installed with `/
 <sub>[↑ Back to contents](#contents)</sub>
 
 ## Support Forge Studio
-Forge Studio is free and open source, built and maintained by one developer. If it saves you time, you can support its development on **[Ko-fi](https://ko-fi.com/forgestudio)**. It helps keep new features, Android/Flutter tooling and fixes coming. Starring the repo, reporting bugs and sharing it help too.
+Forge Studio is built and maintained by one developer. If it saves you time, you can support its development on **[Ko-fi](https://ko-fi.com/forgestudio)**. It helps keep new features, Android/Flutter tooling and fixes coming.
 
 <sub>[↑ Back to contents](#contents)</sub>
 
 ## License
 Copyright © 2026 DrBrainlessLol.
 
-Forge Studio is free software under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). You can use, study, change and share it. If you distribute a modified version, or let other people use a modified version over a network, you must make your source code available under the same license.
+Forge Studio is proprietary software. The compiled app and installable packages are provided for personal and commercial use. Redistribution, decompilation, reverse engineering or modification of the source code is not permitted without a written license from the author.
 
-**Commercial licenses** are available for companies that want to use or embed Forge Studio without the AGPL's obligations. Open an issue or contact the maintainer on GitHub.
+For licensing enquiries — including embedding, white-labelling or acquisition — contact the maintainer on GitHub.
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). First-time contributors sign a short [Contributor License Agreement](CLA.md). Third-party material is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Third-party material is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 <sub>[↑ Back to contents](#contents)</sub>
 
