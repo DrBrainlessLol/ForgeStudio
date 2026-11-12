@@ -14,6 +14,7 @@ const hashArgs = new URLSearchParams(location.hash.slice(1));
 if (hashArgs.get("token")) store.set("fs:token", hashArgs.get("token"));
 if (hashArgs.get("login")) store.set("fs:login", hashArgs.get("login"));
 const hashProject = hashArgs.get("project");
+const _hashInvite = hashArgs.get("invite");
 if (location.hash) history.replaceState(null, "", location.pathname);
 let TOKEN = store.get("fs:token", "");
 let LOGIN = store.get("fs:login", "");
@@ -1224,7 +1225,7 @@ function avatarHtml(p) {
 }
 function renderProfile() {
   $("#avatar").innerHTML = avatarHtml(S.profile);
-  $("#profileName").textContent = S.profile?.name || "";
+  $("#profileName").textContent = (S.profile?.name || "") + (S.profile?.role === "guest" ? " (Guest)" : "");
 }
 async function showLogin() {
   const box = $("#login");
@@ -1353,9 +1354,75 @@ $("#setupFlutterAll").onclick = act(async () => {
   toast("Installing Flutter and the Android tools… progress is shown here and in Processes");
 });
 
+// ---- team settings
+async function renderTeamSettings(container) {
+  container.innerHTML = `<div class="dim small-text" style="padding:.5rem 0">Loading…</div>`;
+  const prof = S.profile || {};
+  if (prof.role === "guest") {
+    container.innerHTML = `<p class="dim small-text">You are a <b>guest</b> in this workspace. You can watch runs and approve actions, but cannot change settings or start new runs.</p>`;
+    return;
+  }
+  try {
+    const { guests } = await api("/api/team/guests", {});
+    let html = `<p class="dim small-text">Invite one collaborator to watch and approve agent actions in this workspace. They get a read-only view — no settings, no file edits, no terminal.</p>`;
+    if (guests.length) {
+      html += `<div style="margin-bottom:.75rem">${guests.map((g) =>
+        `<div class="row" style="padding:.3rem 0;gap:.5rem">
+          <span>${esc(g.name)}</span>
+          <span class="dim small-text">joined ${new Date(g.created * 1000).toLocaleDateString()}</span>
+          <div class="spacer"></div>
+          <button class="btn small plain" data-revoke="${esc(g.pid)}">Revoke</button>
+        </div>`).join("")}</div>`;
+    } else {
+      html += `<p class="dim small-text" style="margin-bottom:.5rem">No guests yet.</p>`;
+    }
+    html += `<button class="btn primary" id="btnTeamInvite">Generate invite link</button>
+      <div id="teamInviteResult" style="margin-top:.75rem"></div>`;
+    container.innerHTML = html;
+    container.querySelectorAll("[data-revoke]").forEach((btn) => {
+      btn.onclick = act(async () => {
+        await api("/api/team/revoke", { pid: btn.dataset.revoke });
+        renderTeamSettings(container);
+      });
+    });
+    document.getElementById("btnTeamInvite").onclick = act(async () => {
+      const { inviteToken } = await api("/api/team/invite", {});
+      const url = `${location.origin}/#invite=${inviteToken}`;
+      document.getElementById("teamInviteResult").innerHTML =
+        `<div class="dim small-text" style="margin-bottom:.25rem">Share this link (expires in 7 days):</div>
+         <div class="row" style="gap:.5rem">
+           <input class="grow mono small-text" readonly value="${esc(url)}" onclick="this.select()">
+           <button class="btn small" onclick="navigator.clipboard.writeText(this.previousElementSibling.value);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+         </div>`;
+    });
+  } catch (e) {
+    container.innerHTML = `<div class="warnbox">${esc(e.message)}</div>`;
+  }
+}
+
+// Inject Team nav button + section into the settings dialog (done once at load time)
+(function injectTeamSettings() {
+  const nav = $("#settingsNav");
+  if (nav && !nav.querySelector('[data-sec="team"]')) {
+    const btn = document.createElement("button");
+    btn.dataset.sec = "team";
+    btn.innerHTML = `<svg class="ic"><use href="#i-users"/></svg> Team`;
+    nav.insertBefore(btn, nav.querySelector('[data-sec="about"]'));
+    const body = $(".settings-body");
+    if (body) {
+      const sec = document.createElement("section");
+      sec.dataset.sec = "team";
+      sec.hidden = true;
+      sec.id = "teamSettingsSec";
+      body.appendChild(sec);
+    }
+  }
+})();
+
 function openSettings(sec = "general") {
   showSection(sec);
   if (sec === "setup" || !S.setup) act(loadSetup)();
+  if (sec === "team") act(() => renderTeamSettings($("#teamSettingsSec")))();
   $("#swatches").innerHTML = ACCENTS.map(([n, c]) => `<button class="swatch" title="${n}" data-accent="${c}" style="background:${c}"></button>`).join("");
   $$("#swatches .swatch").forEach((b) => (b.onclick = () => setPref({ accent: b.dataset.accent })));
   applyAppearance(S.prefs);
@@ -1375,7 +1442,7 @@ function showSection(sec) {
   $$("#settingsNav button").forEach((b) => b.classList.toggle("active", b.dataset.sec === sec));
   $$(".settings-body section").forEach((s) => (s.hidden = s.dataset.sec !== sec));
 }
-$$("#settingsNav button").forEach((b) => (b.onclick = () => showSection(b.dataset.sec)));
+$$("#settingsNav button").forEach((b) => (b.onclick = () => { showSection(b.dataset.sec); if (b.dataset.sec === "team") act(() => renderTeamSettings($("#teamSettingsSec")))(); }));
 $("#setClose").onclick = () => $("#dlgSettings").close();
 $("#btnSettings").onclick = () => openSettings("general");
 $("#btnProfile").onclick = () => openSettings("profile");
@@ -3228,6 +3295,33 @@ $("#dlgAdd").onclose = act(async () => {
     } catch {}
   }
   if (!TOKEN) return showTokenGate();
+  // Handle invite link: show a join dialog before normal auth
+  if (_hashInvite) {
+    document.body.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100vh;background:var(--bg,#1a1a1a)">
+      <div style="max-width:360px;width:90%;padding:2rem;border-radius:12px;background:var(--bg2,#242424);box-shadow:0 4px 24px #0004">
+        <h2 style="margin:0 0 .5rem;font-size:1.25rem">Join workspace</h2>
+        <p style="color:var(--dim,#888);font-size:13px;margin:0 0 1rem">You've been invited to view a Forge Studio workspace as a guest.</p>
+        <input id="guestNameInput" placeholder="Your name" style="width:100%;box-sizing:border-box;margin-bottom:.75rem;padding:.5rem .75rem;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg,#1a1a1a);color:inherit;font-size:14px" autofocus>
+        <button id="btnJoin" style="width:100%;padding:.6rem;border-radius:6px;background:var(--accent,#6c63ff);color:#fff;border:none;font-size:14px;cursor:pointer">Join as guest</button>
+        <p id="joinErr" style="margin-top:.5rem;font-size:12px;color:var(--red,#f44336)"></p>
+      </div>
+    </div>`;
+    document.getElementById("btnJoin").onclick = async () => {
+      const name = (document.getElementById("guestNameInput").value || "").trim() || "Guest";
+      try {
+        const res = await fetch("/api/team/accept", {
+          method: "POST",
+          headers: { "X-Token": TOKEN, "Content-Type": "application/json" },
+          body: JSON.stringify({ inviteToken: _hashInvite, name }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to join");
+        store.set("fs:login", data.loginToken);
+        location.reload();
+      } catch (e) { document.getElementById("joinErr").textContent = e.message; }
+    };
+    return;
+  }
   if (!LOGIN) return showLogin();
   try { await loadState(); } catch (e) { if (!(e instanceof LoginNeeded)) toast("Can't reach server: " + e.message, true); return; }
   $("#mode").value = S.prefs.mode || "ask";

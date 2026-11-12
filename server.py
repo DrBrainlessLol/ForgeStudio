@@ -3123,6 +3123,82 @@ class MainActivity : AppCompatActivity() {{
     return files
 
 
+# ---------------------------------------------------------------- team mode
+
+# Paths a guest profile may not call
+_GUEST_BLOCKED = frozenset({
+    "/api/settings", "/api/profile/delete",
+    "/api/providers/save", "/api/providers/delete",
+    "/api/projects/add", "/api/projects/remove",
+    "/api/git/commit", "/api/git/push", "/api/git/push/force",
+    "/api/agent/start",
+    "/api/android/gradle", "/api/android/run", "/api/android/stop",
+    "/api/android/new", "/api/android/wrapper",
+    "/api/flutter/run", "/api/flutter/task", "/api/flutter/new",
+    "/api/release/keystore/create", "/api/release/keystore/import",
+    "/api/release/inject", "/api/release/props", "/api/release/play/upload",
+    "/api/firebase/connect", "/api/firebase/disconnect",
+    "/api/ci/token",
+    "/api/pty/start",
+    "/api/open",
+})
+
+
+def is_guest(prof):
+    return CONFIG["profiles"].get(prof.pid, {}).get("role") == "guest"
+
+
+def team_invite(owner_prof):
+    """Generate a 7-day invite token the owner can share."""
+    token = secrets.token_urlsafe(32)
+    invites = CONFIG["settings"].setdefault("teamInvites", {})
+    now = time.time()
+    for h in [k for k, v in list(invites.items()) if v.get("expires", 0) < now]:
+        invites.pop(h)
+    if len(invites) >= 10:
+        raise ValueError("Too many pending invites — revoke some first")
+    invites[sha(token)] = {"created": now, "expires": now + 7 * 86400, "inviterPid": owner_prof.pid}
+    save_config()
+    return token
+
+
+def team_accept(invite_token, guest_name):
+    """Accept an invite and return a login token for the new guest profile."""
+    h = sha(invite_token or "")
+    invites = CONFIG["settings"].get("teamInvites") or {}
+    inv = invites.get(h)
+    if not inv:
+        raise ValueError("Invalid or expired invite link")
+    if inv.get("expires", 0) < time.time():
+        invites.pop(h, None)
+        save_config()
+        raise ValueError("This invite link has expired (7 days)")
+    name = (guest_name or "Guest").strip()[:40] or "Guest"
+    pid = create_profile(name, "local", role="guest", invitedBy=inv["inviterPid"])
+    invites.pop(h, None)
+    save_config()
+    login_tok = issue_login(pid)
+    save_config()
+    return {"loginToken": login_tok, "profile": public_profile(pid)}
+
+
+def team_guests(owner_prof):
+    return [{"pid": pid, "name": p["name"], "created": p.get("created", 0)}
+            for pid, p in CONFIG["profiles"].items()
+            if p.get("role") == "guest" and p.get("invitedBy") == owner_prof.pid]
+
+
+def team_revoke(owner_prof, guest_pid):
+    p = CONFIG["profiles"].get(guest_pid)
+    if not p or p.get("invitedBy") != owner_prof.pid:
+        raise ValueError("Guest not found or not yours to revoke")
+    for k in [k for k, v in CONFIG["logins"].items() if v["profile"] == guest_pid]:
+        CONFIG["logins"].pop(k)
+    CONFIG["profiles"].pop(guest_pid, None)
+    save_config()
+    Profile._cache.pop(guest_pid, None)
+
+
 # ---------------------------------------------------------------- app size analyzer
 
 def _apkanalyzer_path():
@@ -5835,6 +5911,8 @@ class Handler(BaseHTTPRequestHandler):
             CONFIG["settings"]["google"] = {"clientId": cid, "clientSecret": secret}
             save_config()
             return None
+        if path == "/api/team/accept":
+            return team_accept(b.get("inviteToken"), b.get("name"))
         raise ValueError(f"unknown endpoint {path}")
 
     def route(self, path, b, prof: Profile):
@@ -5842,6 +5920,19 @@ class Handler(BaseHTTPRequestHandler):
         if project and not Path(project).is_dir():
             raise ValueError("project folder not found")
         serial = b.get("serial") or None
+        if is_guest(prof) and path in _GUEST_BLOCKED:
+            raise ValueError("Guests can watch and approve but cannot change settings or start new runs. Ask the workspace owner.")
+        # ---- team
+        if path == "/api/team/invite":
+            if is_guest(prof):
+                raise ValueError("Guests cannot create invites")
+            token = team_invite(prof)
+            return {"inviteToken": token}
+        if path == "/api/team/guests":
+            return {"guests": team_guests(prof)}
+        if path == "/api/team/revoke":
+            team_revoke(prof, b.get("pid", ""))
+            return None
         # ---- profile & providers
         if path == "/api/profile":
             p = CONFIG["profiles"][prof.pid]
