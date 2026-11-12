@@ -3123,6 +3123,125 @@ class MainActivity : AppCompatActivity() {{
     return files
 
 
+# ---------------------------------------------------------------- github actions / CI
+
+def _gh_headers(token):
+    return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "ForgeStudio"}
+
+
+def _gh_get(url, token):
+    req = urllib.request.Request(url, headers=_gh_headers(token))
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:400]
+        raise ValueError(f"GitHub API error ({e.code}): {body}")
+
+
+def _gh_post(url, token, body=None):
+    data = json.dumps(body or {}).encode()
+    req = urllib.request.Request(url, data=data, headers={**_gh_headers(token), "Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            raw = r.read()
+            return json.loads(raw) if raw.strip() else {}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:400]
+        raise ValueError(f"GitHub API error ({e.code}): {body}")
+
+
+def gh_repo_from_project(project_path):
+    """Detect GitHub remote from the project's git config."""
+    git_config = Path(project_path) / ".git" / "config"
+    if not git_config.exists():
+        return None, None
+    text = git_config.read_text(errors="replace")
+    m = re.search(r'url\s*=\s*.*github\.com[:/]([^/\s]+)/([^/\s\.]+?)(?:\.git)?\s*$', text, re.MULTILINE)
+    if m:
+        return m.group(1), m.group(2)
+    return None, None
+
+
+def ci_status(prof, project_path):
+    ci = prof.data["settings"].get("ciTokens") or {}
+    token = ci.get(project_path) or ci.get("__global__")
+    owner, repo = gh_repo_from_project(project_path)
+    result = {"hasToken": bool(token), "owner": owner, "repo": repo, "detected": bool(owner and repo)}
+    if not token or not owner or not repo:
+        return result
+    try:
+        runs_data = _gh_get(f"https://api.github.com/repos/{owner}/{repo}/actions/runs?per_page=10", token)
+        runs = []
+        for r in runs_data.get("workflow_runs", []):
+            runs.append({
+                "id": r["id"],
+                "name": r.get("display_title") or r.get("head_commit", {}).get("message", "")[:60],
+                "workflow": r.get("name", ""),
+                "status": r["status"],
+                "conclusion": r.get("conclusion"),
+                "branch": r.get("head_branch", ""),
+                "createdAt": r.get("created_at", ""),
+                "url": r.get("html_url", ""),
+                "runNumber": r.get("run_number"),
+            })
+        wf_data = _gh_get(f"https://api.github.com/repos/{owner}/{repo}/actions/workflows", token)
+        workflows = [{"id": w["id"], "name": w["name"], "path": w["path"], "state": w["state"]}
+                     for w in wf_data.get("workflows", []) if w.get("state") == "active"]
+        result.update({"runs": runs, "workflows": workflows})
+    except ValueError as e:
+        result["error"] = str(e)
+    return result
+
+
+def ci_trigger(prof, project_path, workflow_id, ref, inputs):
+    ci = prof.data["settings"].get("ciTokens") or {}
+    token = ci.get(project_path) or ci.get("__global__")
+    if not token:
+        raise ValueError("No GitHub token saved for this project")
+    owner, repo = gh_repo_from_project(project_path)
+    if not owner or not repo:
+        raise ValueError("Could not detect GitHub remote from project's git config")
+    _gh_post(f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+             token, {"ref": ref or "main", "inputs": inputs or {}})
+    return {"triggered": True}
+
+
+def ci_run_logs(prof, project_path, run_id):
+    """Fetch failed job logs for a workflow run (for 'Ask to fix')."""
+    ci = prof.data["settings"].get("ciTokens") or {}
+    token = ci.get(project_path) or ci.get("__global__")
+    if not token:
+        raise ValueError("No GitHub token")
+    owner, repo = gh_repo_from_project(project_path)
+    jobs_data = _gh_get(f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs", token)
+    failed_steps = []
+    for job in jobs_data.get("jobs", []):
+        if job.get("conclusion") not in ("failure", "cancelled"):
+            continue
+        for step in job.get("steps", []):
+            if step.get("conclusion") == "failure":
+                failed_steps.append(f"Job: {job['name']} / Step: {step['name']}")
+    try:
+        log_url = f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/logs"
+        req = urllib.request.Request(log_url, headers=_gh_headers(token))
+        with urllib.request.urlopen(req, timeout=20) as r:
+            import zipfile, io
+            raw = r.read(512 * 1024)
+            zf = zipfile.ZipFile(io.BytesIO(raw))
+            log_text = ""
+            for name in zf.namelist():
+                if any(fs.split(" / Step: ")[0].replace("Job: ", "") in name for fs in failed_steps):
+                    log_text += zf.read(name).decode(errors="replace")[-3000:]
+                    break
+            if not log_text and zf.namelist():
+                log_text = zf.read(zf.namelist()[-1]).decode(errors="replace")[-3000:]
+    except Exception:
+        log_text = ""
+    return {"failedSteps": failed_steps, "log": log_text}
+
+
 # ---------------------------------------------------------------- play store / release
 
 def _ks_dir(prof):
@@ -5396,6 +5515,13 @@ class Handler(BaseHTTPRequestHandler):
                 p = project_root(qs.get("project", [""])[0])
                 mod = qs.get("module", ["app"])[0]
                 return self._send(200, release_status(prof, str(p), mod))
+            if u.path == "/api/ci/status":
+                p = project_root(qs.get("project", [""])[0])
+                return self._send(200, ci_status(prof, str(p)))
+            if u.path == "/api/ci/logs":
+                p = project_root(qs.get("project", [""])[0])
+                run_id = qs.get("run", [""])[0]
+                return self._send(200, ci_run_logs(prof, str(p), run_id))
             if u.path == "/api/android/outputs":  # the APKs / bundles a build produced, newest first
                 root = project_root(qs.get("project", [""])[0])
                 found = []
@@ -5965,6 +6091,17 @@ class Handler(BaseHTTPRequestHandler):
                 links.pop(b["project"], None)
             prof.save()
             return None
+        # ---- github actions / CI
+        if path == "/api/ci/token":
+            ci = prof.data["settings"].setdefault("ciTokens", {})
+            if b.get("token"):
+                ci[project or "__global__"] = b["token"]
+            else:
+                ci.pop(project or "__global__", None)
+            prof.save()
+            return None
+        if path == "/api/ci/trigger":
+            return ci_trigger(prof, project, b.get("workflowId"), b.get("ref"), b.get("inputs"))
         # ---- play store / release
         if path == "/api/release/keystore/create":
             alias = (b.get("alias") or "release").strip()

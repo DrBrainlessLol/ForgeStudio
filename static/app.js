@@ -1834,6 +1834,120 @@ async function loadToolchain() {
       row("New apps use", `AGP ${S.sdk.agp} · Gradle ${S.sdk.gradleVersion} · Kotlin ${S.sdk.kotlin}`) + row("adb", t.adb);
   } catch {}
 }
+// ---- github actions / CI
+
+async function loadCI() {
+  const pane = $("#ciContent");
+  if (!pane) return;
+  pane.innerHTML = `<div class="dim small-text" style="padding:1rem">Loading…</div>`;
+  try {
+    const st = await api(`/api/ci/status?project=${encodeURIComponent(S.cur)}`);
+    renderCI(pane, st);
+  } catch (e) {
+    pane.innerHTML = `<div class="warnbox" style="margin:1rem">${esc(e.message)}</div>`;
+  }
+}
+
+function renderCI(pane, st) {
+  const conclusionIcon = (c) => c === "success" ? "✓" : c === "failure" ? "✗" : c === "cancelled" ? "⊘" : "·";
+  const conclusionClass = (c) => c === "success" ? "color:var(--green,#4caf50)" : c === "failure" ? "color:var(--red,#f44336)" : "opacity:.6";
+  const ago = (ts) => { if (!ts) return ""; const d = Math.round((Date.now() - new Date(ts)) / 60000); return d < 1 ? "just now" : d < 60 ? `${d}m ago` : d < 1440 ? `${Math.round(d/60)}h ago` : `${Math.round(d/1440)}d ago`; };
+
+  let html = "";
+
+  if (!st.hasToken) {
+    html = `<div class="group" style="max-width:520px;margin:1rem auto">
+      <h3>Connect GitHub Actions</h3>
+      <p class="dim small-text">Paste a GitHub Personal Access Token with <code>repo</code> and <code>workflow</code> scopes. Generated at GitHub → Settings → Developer settings → Personal access tokens.</p>
+      ${st.detected ? `<p class="dim small-text">Detected repo: <b>${esc(st.owner)}/${esc(st.repo)}</b></p>` : `<p class="dim small-text">No GitHub remote detected in this project's git config.</p>`}
+      <input id="ciTokenInput" type="password" class="grow" style="width:100%;margin-bottom:.5rem" placeholder="ghp_…">
+      <div class="row">
+        <button class="btn primary" id="btnCiSave">Save token</button>
+        <span class="dim small-text" id="ciTokenErr" style="margin-left:.5rem"></span>
+      </div>
+    </div>`;
+  } else {
+    const repoLabel = st.owner && st.repo ? `${esc(st.owner)}/${esc(st.repo)}` : "unknown repo";
+    if (st.error) {
+      html += `<div class="warnbox slim" style="margin:1rem">${esc(st.error)} <button class="btn small plain" id="btnCiDisconnect" style="margin-left:.5rem">Disconnect</button></div>`;
+    } else {
+      const wfOpts = (st.workflows || []).map((w) => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join("");
+      html += `<div style="padding:.5rem 1rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <span class="dim small-text">${repoLabel}</span>
+        <div class="spacer"></div>
+        <button class="btn small" id="btnCiRefresh">${ic("refresh")} Refresh</button>
+        <button class="btn small plain" id="btnCiDisconnect">Disconnect</button>
+      </div>`;
+      if (wfOpts) {
+        html += `<div class="group" style="margin:.5rem 1rem">
+          <div class="row" style="gap:.5rem;flex-wrap:wrap">
+            <select id="ciWfSel" class="grow" style="min-width:160px">${wfOpts}</select>
+            <input id="ciRefInput" placeholder="Branch / tag / SHA" style="width:140px" value="main">
+            <button class="btn primary" id="btnCiTrigger">${ic("play")} Trigger</button>
+          </div>
+        </div>`;
+      }
+      const runs = st.runs || [];
+      if (runs.length) {
+        const cards = runs.map((r) => {
+          const icon = r.status === "completed" ? conclusionIcon(r.conclusion) : "⟳";
+          const style = r.status === "completed" ? conclusionClass(r.conclusion) : "opacity:.8";
+          return `<div class="card" style="margin:.35rem 1rem;padding:.6rem 1rem;border-radius:6px;background:var(--bg2)">
+            <div class="row" style="gap:.5rem;align-items:flex-start">
+              <span style="${style};font-size:1rem;line-height:1.4;flex-shrink:0">${icon}</span>
+              <div class="grow" style="min-width:0">
+                <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.name)}">${esc(r.name)}</div>
+                <div class="dim small-text">${esc(r.workflow)} · ${esc(r.branch)} · ${ago(r.createdAt)}</div>
+              </div>
+              <div class="row" style="gap:.35rem;flex-shrink:0">
+                ${r.conclusion === "failure" || r.conclusion === "cancelled" ? `<button class="btn primary small" data-run-id="${r.id}">${ic("bot")} Ask to fix</button>` : ""}
+                <a class="btn small plain" href="${esc(r.url)}" target="_blank" rel="noopener">${ic("external")} View</a>
+              </div>
+            </div>
+          </div>`;
+        }).join("");
+        html += `<div style="margin-bottom:.5rem">${cards}</div>`;
+      } else {
+        html += `<p class="dim small-text" style="padding:1rem">No recent workflow runs found.</p>`;
+      }
+    }
+  }
+
+  pane.innerHTML = html;
+
+  if ($("#btnCiSave")) {
+    $("#btnCiSave").onclick = act(async () => {
+      const tok = $("#ciTokenInput").value.trim();
+      if (!tok) return;
+      await api("/api/ci/token", { project: S.cur, token: tok });
+      loadCI();
+    });
+  }
+  if ($("#btnCiDisconnect")) {
+    $("#btnCiDisconnect").onclick = act(async () => { await api("/api/ci/token", { project: S.cur, token: null }); loadCI(); });
+  }
+  if ($("#btnCiRefresh")) $("#btnCiRefresh").onclick = act(loadCI);
+  if ($("#btnCiTrigger")) {
+    $("#btnCiTrigger").onclick = act(async () => {
+      await api("/api/ci/trigger", { project: S.cur, workflowId: $("#ciWfSel").value, ref: $("#ciRefInput").value.trim() || "main" });
+      toast("Workflow triggered");
+      setTimeout(() => act(loadCI)(), 3000);
+    });
+  }
+  pane.querySelectorAll("[data-run-id]").forEach((btn) => {
+    btn.onclick = act(async () => {
+      btn.textContent = "Loading…";
+      const data = await api(`/api/ci/logs?project=${encodeURIComponent(S.cur)}&run=${btn.dataset.runId}`);
+      const steps = (data.failedSteps || []).join("\n");
+      const log = data.log || "";
+      const msg = `GitHub Actions run #${btn.dataset.runId} failed.\n\nFailed steps:\n${steps || "(unknown)"}\n\nLog tail:\n\`\`\`\n${log || "(no log available)"}\n\`\`\`\n\nPlease investigate the codebase and fix the CI failure.`;
+      setMode("agent");
+      $("#input").value = msg;
+      $("#input").focus();
+    });
+  });
+}
+
 // ---- play store / release
 
 async function loadRelease() {
@@ -2887,7 +3001,7 @@ $("#btnRestart").onclick = act(async () => {
   if (isFlutter()) return api("/api/flutter/reload", { project: S.cur, full: true });
   needDevice(); if (!appId()) throw new Error("No applicationId found"); await api("/api/android/restart", { project: S.cur, serial: serial(), applicationId: appId() }); });
 $("#btnBuild").onclick = act(() => isFlutter() ? flutterTask(`build ${flutterBuildTarget()} --${variant()}`) : gradleTask(`:${$("#moduleSel").value || "app"}:assemble${variant()}`));
-$$("#droidTabs button").forEach((b) => (b.onclick = () => { setDroidView(b.dataset.dv); if (b.dataset.dv === "crashlytics") loadCrashlytics(); if (b.dataset.dv === "release") loadRelease(); }));
+$$("#droidTabs button").forEach((b) => (b.onclick = () => { setDroidView(b.dataset.dv); if (b.dataset.dv === "crashlytics") loadCrashlytics(); if (b.dataset.dv === "release") loadRelease(); if (b.dataset.dv === "ci") loadCI(); }));
 $("#variantSel").onchange = () => { store.set(isFlutter() ? "fs:flmode" : "fs:variant", variant()); renderTaskChips(); renderFlutterRun(); };
 $("#moduleSel").onchange = renderTaskChips;
 $("#btnNewApp").onclick = () => (isFlutter() ? openNewFlutter() : openNewApp());
@@ -3040,6 +3154,7 @@ $("#dlgAdd").onclose = act(async () => {
   setDroidView(store.get("fs:droidView", "run"));
   if (store.get("fs:droidView") === "crashlytics") loadCrashlytics();
   if (store.get("fs:droidView") === "release") loadRelease();
+  if (store.get("fs:droidView") === "ci") loadCI();
   setMode(store.get("fs:mode", tab === "code" || store.get("fs:code", false) ? "editor" : "agent"), false);
   let start = (() => { try { return sessionStorage.getItem(pkey("cur")); } catch { return null; } })() || store.get(pkey("cur"), null);
   if (hashProject) {

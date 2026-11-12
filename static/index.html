@@ -199,6 +199,7 @@
         <button data-dv="devices"><svg class="ic"><use href="#i-wifi"/></svg> Devices</button>
         <button data-dv="crashlytics" id="crashlyticsTab"><svg class="ic"><use href="#i-alert"/></svg> Crashlytics</button>
         <button data-dv="release"><svg class="ic"><use href="#i-external"/></svg> Release</button>
+        <button data-dv="ci"><svg class="ic"><use href="#i-activity"/></svg> CI</button>
         <div class="spacer"></div>
         <span class="dim small-text" id="androidInfo"></span>
       </nav>
@@ -341,6 +342,11 @@
       <!-- play store release -->
       <div class="droid-view scroll" data-dv="release" hidden id="releasePane">
         <div id="releaseContent"></div>
+      </div>
+
+      <!-- github actions CI -->
+      <div class="droid-view scroll" data-dv="ci" hidden id="ciPane">
+        <div id="ciContent"></div>
       </div>
 
       <!-- not an android project -->
