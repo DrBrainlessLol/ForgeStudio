@@ -1834,6 +1834,119 @@ async function loadToolchain() {
       row("New apps use", `AGP ${S.sdk.agp} · Gradle ${S.sdk.gradleVersion} · Kotlin ${S.sdk.kotlin}`) + row("adb", t.adb);
   } catch {}
 }
+// ---- firebase / crashlytics
+async function loadCrashlytics() {
+  const pane = $("#crashlyticsContent");
+  if (!pane) return;
+  const p = S.cur;
+  pane.innerHTML = `<div class="dim small-text" style="padding:1rem">Loading…</div>`;
+  try {
+    const status = await api(`/api/firebase/status?project=${encodeURIComponent(p)}`);
+    if (!status.connected) { renderCrashSetup(pane, null); return; }
+    if (!status.linkedApp) { renderCrashSetup(pane, status); return; }
+    const data = await api(`/api/firebase/crashes?project=${encodeURIComponent(p)}`);
+    renderCrashList(pane, data, status);
+  } catch (e) {
+    pane.innerHTML = `<div class="warnbox" style="margin:1rem">${esc(e.message)}</div>`;
+  }
+}
+
+function renderCrashSetup(pane, status) {
+  if (!status) {
+    pane.innerHTML = `
+      <div class="group" style="max-width:520px;margin:1rem auto">
+        <h3>Connect Firebase Crashlytics</h3>
+        <p class="dim small-text">Paste your Firebase service account key JSON to pull production crashes into Forge. The key stays on this machine.</p>
+        <p class="dim small-text">In <a href="https://console.firebase.google.com" target="_blank" rel="noopener">Firebase Console</a> → Project settings → Service accounts → Generate new private key.</p>
+        <textarea id="fbSaInput" rows="6" class="mono" style="width:100%;resize:vertical;font-size:11px" placeholder='{"type":"service_account","project_id":"…","private_key":"…","client_email":"…"}'></textarea>
+        <div class="row" style="margin-top:.5rem">
+          <button class="btn primary" id="btnFbConnect">Connect</button>
+          <span class="dim small-text" id="fbConnectErr" style="margin-left:.5rem"></span>
+        </div>
+      </div>`;
+    $("#btnFbConnect").onclick = act(async () => {
+      const raw = $("#fbSaInput").value.trim();
+      if (!raw) return;
+      $("#fbConnectErr").textContent = "";
+      try {
+        const res = await api("/api/firebase/connect", { serviceAccount: JSON.parse(raw) });
+        await linkCrashApp(pane, res);
+      } catch (e) { $("#fbConnectErr").textContent = e.message; }
+    });
+    return;
+  }
+  const opts = status.apps.map((a) =>
+    `<option value="${esc(a.appId)}">${esc(a.displayName || a.packageName || a.appId)}</option>`).join("");
+  pane.innerHTML = `
+    <div class="group" style="max-width:520px;margin:1rem auto">
+      <h3>Link a Firebase app</h3>
+      <p class="dim small-text">Connected to <b>${esc(status.projectId)}</b>. Pick the Android app that matches this project.</p>
+      ${opts ? `<select id="fbAppSel" class="grow">${opts}</select>` : `<p class="dim">No Android apps found in this Firebase project.</p>`}
+      <div class="row" style="margin-top:.5rem">
+        ${opts ? `<button class="btn primary" id="btnFbLink">Link app</button>` : ""}
+        <button class="btn plain" id="btnFbDisconnect">Disconnect Firebase</button>
+      </div>
+    </div>`;
+  if ($("#btnFbLink")) {
+    $("#btnFbLink").onclick = act(async () => {
+      const appId = $("#fbAppSel").value;
+      await api("/api/firebase/link", { project: S.cur, appId });
+      loadCrashlytics();
+    });
+  }
+  $("#btnFbDisconnect").onclick = act(async () => { await api("/api/firebase/disconnect", {}); loadCrashlytics(); });
+}
+
+async function linkCrashApp(pane, status) {
+  if (status.apps.length === 1) {
+    await api("/api/firebase/link", { project: S.cur, appId: status.apps[0].appId });
+    loadCrashlytics();
+    return;
+  }
+  renderCrashSetup(pane, status);
+}
+
+function renderCrashList(pane, data, status) {
+  const { crashes, projectId } = data;
+  const ago = (ts) => { if (!ts) return ""; const d = Math.round((Date.now() - new Date(ts)) / 86400000); return d < 1 ? "today" : d === 1 ? "yesterday" : `${d}d ago`; };
+  const header = `
+    <div class="row" style="padding:.5rem 1rem;gap:.5rem;align-items:center">
+      <span class="dim small-text">Firebase: <b>${esc(projectId)}</b></span>
+      <div class="spacer"></div>
+      <button class="btn small" id="btnCrashRefresh">${ic("refresh")} Refresh</button>
+      <button class="btn small plain" id="btnFbUnlink">Change app</button>
+    </div>`;
+  if (!crashes.length) {
+    pane.innerHTML = header + `<div class="dim small-text" style="padding:1rem">No open crashes — nice!</div>`;
+  } else {
+    const cards = crashes.map((c) =>
+      `<div class="card" style="margin:.5rem 1rem;padding:.75rem 1rem;border-radius:6px;background:var(--bg2)">
+        <div class="row" style="gap:.5rem;align-items:flex-start">
+          <div class="grow" style="min-width:0">
+            <div class="mono" style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(c.title)}">${esc(c.title)}</div>
+            ${c.exceptionType ? `<div class="dim small-text mono">${esc(c.exceptionType)}</div>` : ""}
+            <div class="dim small-text" style="margin-top:.25rem">
+              ${c.count ? `<b>${c.count.toLocaleString()}</b> crashes` : ""}${c.users ? ` · <b>${c.users.toLocaleString()}</b> users` : ""}
+              ${c.lastSeen ? ` · last seen ${ago(c.lastSeen)}` : ""}
+            </div>
+          </div>
+          <button class="btn primary small" data-crash-id="${esc(c.id)}" data-crash-title="${esc(c.title)}" data-crash-type="${esc(c.exceptionType)}" data-crash-count="${c.count}" data-crash-users="${c.users}">${ic("bot")} Ask to fix</button>
+        </div>
+      </div>`).join("");
+    pane.innerHTML = header + cards;
+  }
+  pane.querySelectorAll("[data-crash-id]").forEach((btn) => {
+    btn.onclick = () => {
+      const msg = `Firebase Crashlytics reports a crash in production:\n\n**Exception:** ${btn.dataset.crashType || btn.dataset.crashTitle}\n**Message:** ${btn.dataset.crashTitle}\n**Occurrences:** ${btn.dataset.crashCount} crashes, ${btn.dataset.crashUsers} affected users\n\nPlease investigate the codebase and fix this crash.`;
+      setMode("agent");
+      $("#input").value = msg;
+      $("#input").focus();
+    };
+  });
+  if ($("#btnCrashRefresh")) $("#btnCrashRefresh").onclick = act(loadCrashlytics);
+  if ($("#btnFbUnlink")) $("#btnFbUnlink").onclick = act(async () => { await api("/api/firebase/link", { project: S.cur, appId: null }); loadCrashlytics(); });
+}
+
 function openNewApp() {
   $("#naName").value = ""; $("#naPkg").value = ""; delete $("#naPkg").dataset.edited;
   $("#naParent").value = "~/AndroidStudioProjects";
@@ -2596,7 +2709,7 @@ $("#btnRestart").onclick = act(async () => {
   if (isFlutter()) return api("/api/flutter/reload", { project: S.cur, full: true });
   needDevice(); if (!appId()) throw new Error("No applicationId found"); await api("/api/android/restart", { project: S.cur, serial: serial(), applicationId: appId() }); });
 $("#btnBuild").onclick = act(() => isFlutter() ? flutterTask(`build ${flutterBuildTarget()} --${variant()}`) : gradleTask(`:${$("#moduleSel").value || "app"}:assemble${variant()}`));
-$$("#droidTabs button").forEach((b) => (b.onclick = () => setDroidView(b.dataset.dv)));
+$$("#droidTabs button").forEach((b) => (b.onclick = () => { setDroidView(b.dataset.dv); if (b.dataset.dv === "crashlytics") loadCrashlytics(); }));
 $("#variantSel").onchange = () => { store.set(isFlutter() ? "fs:flmode" : "fs:variant", variant()); renderTaskChips(); renderFlutterRun(); };
 $("#moduleSel").onchange = renderTaskChips;
 $("#btnNewApp").onclick = () => (isFlutter() ? openNewFlutter() : openNewApp());
@@ -2747,6 +2860,7 @@ $("#dlgAdd").onclose = act(async () => {
   const tab = store.get("fs:tab", "preview");
   showTab(tab);
   setDroidView(store.get("fs:droidView", "run"));
+  if (store.get("fs:droidView") === "crashlytics") loadCrashlytics();
   setMode(store.get("fs:mode", tab === "code" || store.get("fs:code", false) ? "editor" : "agent"), false);
   let start = (() => { try { return sessionStorage.getItem(pkey("cur")); } catch { return null; } })() || store.get(pkey("cur"), null);
   if (hashProject) {

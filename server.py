@@ -3123,6 +3123,133 @@ class MainActivity : AppCompatActivity() {{
     return files
 
 
+# ---------------------------------------------------------------- firebase / crashlytics
+
+_fb_token_cache = {}  # client_email → (token, expires_at)
+
+
+def _fb_b64url(data):
+    if isinstance(data, (str, bytes)):
+        data = data if isinstance(data, bytes) else data.encode()
+    return base64.b64encode(data).replace(b"+", b"-").replace(b"/", b"_").rstrip(b"=").decode()
+
+
+def _fb_jwt(sa):
+    """Sign a Google service-account JWT using the system openssl binary (no third-party deps)."""
+    now = int(time.time())
+    header = _fb_b64url(json.dumps({"alg": "RS256", "typ": "JWT"}, separators=(",", ":")))
+    payload = _fb_b64url(json.dumps({
+        "iss": sa["client_email"],
+        "scope": "https://www.googleapis.com/auth/cloud-platform",
+        "aud": "https://oauth2.googleapis.com/token",
+        "exp": now + 3600,
+        "iat": now,
+    }, separators=(",", ":")))
+    fd, keyfile = tempfile.mkstemp(suffix=".pem")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(sa["private_key"])
+        r = subprocess.run(["openssl", "dgst", "-sha256", "-sign", keyfile],
+                           input=f"{header}.{payload}".encode(), capture_output=True, timeout=5)
+        if r.returncode != 0:
+            raise ValueError(f"JWT signing failed: {r.stderr.decode(errors='replace')[:300]}")
+        return f"{header}.{payload}.{_fb_b64url(r.stdout)}"
+    finally:
+        try:
+            os.unlink(keyfile)
+        except OSError:
+            pass
+
+
+def _fb_token(sa):
+    email = sa["client_email"]
+    cached = _fb_token_cache.get(email)
+    if cached and cached[1] > time.time() + 60:
+        return cached[0]
+    data = urllib.parse.urlencode({
+        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        "assertion": _fb_jwt(sa),
+    }).encode()
+    req = urllib.request.Request(
+        "https://oauth2.googleapis.com/token", data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            resp = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise ValueError(f"Firebase auth failed: {e.read().decode(errors='replace')[:300]}")
+    token, exp = resp["access_token"], time.time() + resp.get("expires_in", 3600)
+    _fb_token_cache[email] = (token, exp)
+    return token
+
+
+def _fb_get(url, token):
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:400]
+        raise ValueError(f"Firebase API error ({e.code}): {body}")
+
+
+def firebase_connect(sa_raw, prof):
+    """Validate service account JSON and store it. Returns project info + app list."""
+    try:
+        sa = json.loads(sa_raw) if isinstance(sa_raw, str) else sa_raw
+    except (json.JSONDecodeError, TypeError):
+        raise ValueError("Not valid JSON — paste the full contents of your service account key file")
+    for k in ("client_email", "private_key", "project_id"):
+        if k not in sa:
+            raise ValueError(f"Service account JSON is missing the '{k}' field")
+    token = _fb_token(sa)
+    proj = _fb_get(f"https://firebase.googleapis.com/v1beta1/projects/{sa['project_id']}", token)
+    project_number = proj.get("projectNumber", "")
+    apps_resp = _fb_get(f"https://firebase.googleapis.com/v1beta1/projects/{sa['project_id']}/androidApps", token)
+    apps = [{"appId": a["appId"], "packageName": a.get("packageName", ""), "displayName": a.get("displayName", a.get("packageName", a["appId"]))}
+            for a in apps_resp.get("apps", [])]
+    fb = prof.data["settings"].setdefault("firebase", {})
+    fb["serviceAccount"] = sa
+    fb["projectNumber"] = project_number
+    fb["projectId"] = sa["project_id"]
+    fb["apps"] = apps
+    prof.save()
+    return {"projectId": sa["project_id"], "projectNumber": project_number, "apps": apps}
+
+
+def firebase_crashes(prof, project_path):
+    """Fetch recent open crash groups from Crashlytics for the app linked to this project."""
+    fb = prof.data["settings"].get("firebase") or {}
+    sa = fb.get("serviceAccount")
+    if not sa:
+        raise ValueError("Firebase not connected")
+    app_links = fb.get("appLinks") or {}
+    app_id = app_links.get(project_path)
+    if not app_id:
+        raise ValueError("No Firebase app linked to this project")
+    project_number = fb.get("projectNumber", "")
+    token = _fb_token(sa)
+    url = (f"https://firebaseappcrashlyticsservice.googleapis.com/v1beta/projects/{project_number}"
+           f"/apps/{app_id}/crashGroups?orderBy=createTime%20desc&pageSize=20")
+    result = _fb_get(url, token)
+    out = []
+    for g in result.get("crashGroups", []):
+        issue = g.get("issue") or {}
+        out.append({
+            "id": g.get("name", "").rsplit("/", 1)[-1],
+            "title": issue.get("subtitle") or issue.get("exceptionType") or "Crash",
+            "exceptionType": issue.get("exceptionType") or "",
+            "signal": issue.get("signal") or "",
+            "count": g.get("crashCount", 0),
+            "users": g.get("distinctUsers", 0),
+            "firstSeen": g.get("firstSeenTime") or g.get("createTime", ""),
+            "lastSeen": g.get("lastSeenTime", ""),
+            "state": g.get("state", "OPEN"),
+        })
+    return {"crashes": out, "appId": app_id, "projectId": fb.get("projectId", "")}
+
+
 # ---------------------------------------------------------------- flutter
 # `flutter run --machine` speaks the Flutter daemon protocol (one JSON message per line) on stdin/stdout, the same way
 # IDEs drive it. We translate its events into readable log lines and send it hot reload / restart / stop commands.
@@ -4991,6 +5118,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"lines": list(rec["log"]) if rec else []})
             if u.path == "/api/setup/status":
                 return self._send(200, setup_status())
+            if u.path == "/api/firebase/status":
+                fb = prof.data["settings"].get("firebase") or {}
+                sa = fb.get("serviceAccount")
+                connected = bool(sa and fb.get("projectNumber"))
+                app_links = fb.get("appLinks") or {}
+                linked = app_links.get(qs.get("project", [""])[0])
+                return self._send(200, {"connected": connected, "projectId": fb.get("projectId", ""),
+                                        "apps": fb.get("apps", []), "linkedApp": linked})
+            if u.path == "/api/firebase/crashes":
+                p = project_root(qs.get("project", [""])[0])
+                return self._send(200, firebase_crashes(prof, str(p)))
             if u.path == "/api/android/outputs":  # the APKs / bundles a build produced, newest first
                 root = project_root(qs.get("project", [""])[0])
                 found = []
@@ -5543,6 +5681,22 @@ class Handler(BaseHTTPRequestHandler):
             target = b.get("url") or b.get("path")
             subprocess.Popen(["open" if IS_MAC else "xdg-open", target], start_new_session=True, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
+            return None
+        # ---- firebase
+        if path == "/api/firebase/connect":
+            return firebase_connect(b.get("serviceAccount"), prof)
+        if path == "/api/firebase/disconnect":
+            prof.data["settings"].pop("firebase", None)
+            prof.save()
+            return None
+        if path == "/api/firebase/link":
+            fb = prof.data["settings"].setdefault("firebase", {})
+            links = fb.setdefault("appLinks", {})
+            if b.get("appId"):
+                links[b["project"]] = b["appId"]
+            else:
+                links.pop(b["project"], None)
+            prof.save()
             return None
         # ---- android
         if path == "/api/android/studio":
