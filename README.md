@@ -11,7 +11,7 @@
 
 A lightweight desktop studio for AI coding agents, with built-in Android and Flutter tooling. Chat with Claude Code, Codex or any CLI agent (or the built-in API-key engine), then switch between three workspaces: **Agent** (chat, tasks and live website preview), **Editor** (a familiar IDE layout with explorer, search and Git) and **Android / Flutter** (Gradle or Flutter builds, hot reload, new-app wizards, live phone screen and logs). The agent comes with you in every mode.
 
-A companion Android app, [Forge Mobile](#forge-mobile-android), controls it from your phone, even when you are away from home (see [Remote access from your phone](#remote-access-from-your-phone)).
+A companion Android app, [Forge Mobile](#forge-mobile-android), controls it from your phone, even when you are away from home (see [Remote access from your phone](#remote-access-from-your-phone)). **[Download Forge Mobile 0.3.0 (APK)](https://github.com/DrBrainlessLol/ForgeStudio/releases/download/mobile-v0.3.0/ForgeMobile-0.3.0.apk)** · [release notes](https://github.com/DrBrainlessLol/ForgeStudio/releases/tag/mobile-v0.3.0).
 
 It uses only the Python standard library and plain HTML/CSS/JS with no build step, and runs as a desktop web app (Chromium app window, installable PWA, optional LAN access).
 
@@ -241,6 +241,8 @@ Requests made on this computer's own UI are never blocked by these switches; the
 <sub>[↑ Back to contents](#contents)</sub>
 
 ## Forge Mobile (Android)
+
+**Current version: 0.3.0.** [Download the APK](https://github.com/DrBrainlessLol/ForgeStudio/releases/download/mobile-v0.3.0/ForgeMobile-0.3.0.apk) · [release notes and install steps](https://github.com/DrBrainlessLol/ForgeStudio/releases/tag/mobile-v0.3.0) · [all Forge Mobile releases](https://github.com/DrBrainlessLol/ForgeStudio/releases?q=mobile). Sideload it on Android 8.0 or newer. The app's source code is kept in a private repository.
 
 Forge Mobile is the companion Android app. It is a remote for the Forge Studio running on your computer, not a second copy of it: your code, agents and keys stay on the computer. It talks to the HTTP API listed in [API reference](#api-reference).
 
