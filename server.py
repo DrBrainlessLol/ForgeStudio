@@ -335,20 +335,29 @@ def android_info(path: Path):
     if not ((path / "settings.gradle").exists() or (path / "settings.gradle.kts").exists()):
         return None
     info = {"gradlew": (path / "gradlew").exists(), "gradle": wrapper_version(path), "modules": []}
-    for child in sorted(path.iterdir()):
-        if not child.is_dir() or child.name in SKIP_DIRS:
-            continue
-        for f in ("build.gradle.kts", "build.gradle"):
-            bf = child / f
-            if bf.exists():
-                text = bf.read_text(errors="ignore")
-                if "com.android.application" in text or "android.application" in text:
-                    m = re.search(r'applicationId\s*=?\s*["\']([\w.]+)["\']', text)
-                    num = lambda k: (re.search(k + r'\s*=?\s*(\d+)', text) or [None, None])[1]  # noqa: E731
-                    info["modules"].append({"name": child.name, "applicationId": m.group(1) if m else None,
-                                            "minSdk": num("minSdk"), "targetSdk": num("targetSdk"), "compileSdk": num("compileSdk"),
-                                            "compose": "compose = true" in text or "kotlin.compose" in text})
-                break
+
+    def scan(d: Path, depth):
+        for child in sorted(d.iterdir()):
+            if not child.is_dir() or child.name in SKIP_DIRS or child.name.startswith("."):
+                continue
+            found = False
+            for f in ("build.gradle.kts", "build.gradle"):
+                bf = child / f
+                if bf.exists():
+                    text = bf.read_text(errors="ignore")
+                    if "com.android.application" in text or "android.application" in text:
+                        found = True
+                        m = re.search(r'applicationId\s*=?\s*["\']([\w.]+)["\']', text)
+                        num = lambda k: (re.search(k + r'\s*=?\s*(\d+)', text) or [None, None])[1]  # noqa: E731
+                        rel = child.relative_to(path).as_posix().replace("/", ":")  # nested modules use Gradle's ":a:b" path
+                        info["modules"].append({"name": rel, "applicationId": m.group(1) if m else None,
+                                                "minSdk": num("minSdk"), "targetSdk": num("targetSdk"), "compileSdk": num("compileSdk"),
+                                                "compose": "compose = true" in text or "kotlin.compose" in text})
+                    break
+            if not found and depth < 3:  # apps/mobile/app, android/app, composeApp ...
+                scan(child, depth + 1)
+
+    scan(path, 1)
     return info
 
 
@@ -4982,6 +4991,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"lines": list(rec["log"]) if rec else []})
             if u.path == "/api/setup/status":
                 return self._send(200, setup_status())
+            if u.path == "/api/android/outputs":  # the APKs / bundles a build produced, newest first
+                root = project_root(qs.get("project", [""])[0])
+                found = []
+                for base, dirs, names in os.walk(root):
+                    dirs[:] = [d for d in dirs if d not in {"node_modules", ".git", ".gradle", ".idea", "intermediates", "tmp", "generated"} and not d.startswith(".")]
+                    if "outputs" not in Path(base).parts:
+                        continue
+                    for n in names:
+                        if n.lower().endswith((".apk", ".aab")):
+                            f = Path(base) / n
+                            try:
+                                st = f.stat()
+                            except OSError:
+                                continue
+                            parts = f.relative_to(root).parts
+                            found.append({"name": n, "path": str(f), "size": st.st_size, "mtime": st.st_mtime, "kind": f.suffix.lower()[1:],
+                                          "module": ":".join(parts[:parts.index("build")]) if "build" in parts else "", "variant": f.parent.name})
+                found.sort(key=lambda x: x["mtime"], reverse=True)
+                return self._send(200, {"files": found[:30]})
             if u.path == "/api/android/sdk":
                 return self._send(200, {"platforms": android_platforms(), "gradle": bool(gradle_launcher()),
                                         "agp": AGP_VERSION, "gradleVersion": GRADLE_VERSION, "kotlin": KOTLIN_VERSION})
@@ -5537,7 +5565,7 @@ class Handler(BaseHTTPRequestHandler):
             gradle(project, b["task"], serial)
             return None
         if path == "/api/android/run":
-            app_id, module = b.get("applicationId"), b.get("module") or "app"
+            app_id, module = b.get("applicationId"), (b.get("module") or "app").replace("/", ":").strip(":")
 
             def after(code):
                 if code == 0 and app_id:
