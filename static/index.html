@@ -599,6 +599,7 @@
       <button data-sec="models"><svg class="ic"><use href="#i-key"/></svg> Models &amp; Keys</button>
       <button data-sec="web"><svg class="ic"><use href="#i-globe"/></svg> Web App</button>
       <button data-sec="android"><svg class="ic"><use href="#i-phone"/></svg> Android</button>
+      <button data-sec="tokens"><svg class="ic"><use href="#i-zap"/></svg> Token usage</button>
       <button data-sec="about"><svg class="ic"><use href="#i-info"/></svg> About</button>
     </nav>
     <div class="settings-body">
@@ -778,6 +779,18 @@
         </div>
         <div class="row end"><button class="btn primary" id="setStudioSave">Save</button></div>
         <div class="dim" id="setTools"></div>
+      </section>
+
+      <section data-sec="tokens" hidden>
+        <h2>Token usage</h2>
+        <p class="dim">A read-only look at this computer's Claude Code sessions: where tokens go and what would save the most. Nothing leaves this computer and nothing is changed. Amounts are estimates, counted in input-token equivalents (a cache read costs 0.1, a cache write 1.25 to 2, output 5).</p>
+        <div class="form-group">
+          <div class="form-row"><span>Compact long chats automatically<br><small class="dim">Before your next message, a chat whose history is above the limit is compacted, so it isn't re-read in full on every turn. Compacting keeps a summary, so very old detail is lost.</small></span><label class="switch"><input type="checkbox" id="setAutoCompact"><i></i></label></div>
+          <div class="form-row"><span>Compact above</span><select id="setCompactAt"><option value="100000">100k tokens</option><option value="150000">150k tokens</option><option value="200000">200k tokens</option><option value="300000">300k tokens</option></select></div>
+        </div>
+        <div id="tokSaved"></div>
+        <div class="segmented" id="tokDays"><button data-days="1">Today</button><button data-days="7" class="active">7 days</button><button data-days="30">30 days</button></div>
+        <div id="tokBody"></div>
       </section>
 
       <section data-sec="about" hidden>

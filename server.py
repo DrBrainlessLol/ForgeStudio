@@ -1296,6 +1296,7 @@ class Run:
         self.think_buf = {"text": "", "sub": False, "t0": None}
         self.handoff, self.advisor, self.adv_model = "", None, None  # set by start_chat / run_builtin
         self.disk_warned = False
+        self.compact_cost = 0.0   # USD spent compacting this chat at the start of this run
 
     def agent_prompt(self):
         """What the agent is sent: the user's message, after the earlier conversation when the chat changed agent."""
@@ -1379,8 +1380,51 @@ class Run:
 
     def set_session(self, sid):
         if sid and self.chat.get("session") != sid:
+            if self.chat.get("session"):  # a different conversation: earlier compaction no longer applies
+                self.chat.pop("compactOffset", None)
+                self.chat.pop("ctx", None)
             self.chat["session"] = sid
             self.prof.save()
+
+    def maybe_compact(self, exe, env):
+        """Compact a long chat before the next message: its whole history is re-read on every turn, so a shorter one makes each turn cheaper."""
+        st = self.prof.data["settings"]
+        sess, ctx = self.chat.get("session"), self.chat.get("ctx") or 0
+        if not sess or st.get("autoCompact", True) is False or ctx < int(st.get("compactAt") or COMPACT_AT):
+            return 0.0
+        self.event({"type": "ui_raw", "text": f"Compacting this chat first ({ctx // 1000}k tokens of history) so each message after it costs less…"})
+        self.spawn([exe, "-p", "/compact", "--resume", sess, "--output-format", "json"] + (["--model", self.model] if self.model else []),
+                   env, stdin=subprocess.DEVNULL)
+        raw = self.popen.stdout.read()
+        self.popen.wait()
+        try:
+            out = json.loads(raw)
+        except ValueError:
+            out = {}
+        if self.stopped or self.popen.returncode or out.get("is_error"):
+            return 0.0
+        self.set_session(out.get("session_id"))
+        pre, post = compact_sizes(self.chat.get("session"))
+        if not pre or not post or post >= pre:
+            return 0.0
+        cost = (out.get("total_cost_usd") or 0) + post * (W_CW5 - W_CR) * (unit_usd(out) or 0)  # plus writing the shorter history to the cache once
+        self.chat["ctx"] = post
+        self.chat["compactOffset"] = (self.chat.get("compactOffset") or 0) + pre - post
+        self.prof.save()
+        record_saving("compact", chat=self.cid, pre=pre, post=post, usd=round(cost, 4))
+        self.event({"type": "ui_raw", "text": f"Compacted {pre // 1000}k to {post // 1000}k tokens (cost ${cost:.3f})."})
+        return cost
+
+    def add_saved(self, slim, ev):
+        """What compacting saved in this run: the history that no longer had to be re-read on each of its turns."""
+        offset, turns, p = self.chat.get("compactOffset") or 0, slim.get("turns") or 0, unit_usd(ev)
+        if offset and turns:
+            tokens = offset * turns
+            usd = round(tokens * W_CR * p, 4) if p else None
+            slim["saved"] = {"tokens": tokens, "usd": usd, "cost": round(self.compact_cost, 4)}
+            record_saving("run", chat=self.cid, tokens=tokens, usd=usd or 0)
+        elif self.compact_cost:
+            slim["saved"] = {"tokens": 0, "usd": None, "cost": round(self.compact_cost, 4)}
 
     # -- lifecycle
     def start(self):
@@ -1496,6 +1540,9 @@ class Run:
             cmd += ["--resume", self.chat["session"]]
         if self.files:
             cmd += ["--add-dir", str(self.prof.dir / "uploads")]
+        self.compact_cost = self.maybe_compact(exe, provider_env(self.prov))
+        if self.stopped:
+            return 0, ""
         err_lines = self.spawn(cmd, provider_env(self.prov))
         content = [{"type": "text", "text": self.agent_prompt() + attachment_note(self.files)}]
         for f in with_frames(self.files):
@@ -1523,6 +1570,11 @@ class Run:
                 continue
             if ev.get("type") == "user":
                 self.keep_images(ev)
+            if ev.get("type") == "assistant" and not ev.get("parent_tool_use_id"):  # remember how long the conversation is
+                u = (ev.get("message") or {}).get("usage") or {}
+                n = sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+                if n:
+                    self.chat["ctx"] = n
             slim = slim_event(ev)
             if not slim:
                 continue
@@ -1541,6 +1593,8 @@ class Run:
                             "Check the key in Settings → Models & keys, or pick another model."})
                 self.stop()
             else:
+                if slim["type"] == "result":
+                    self.add_saved(slim, ev)
                 self.event(slim)
                 if slim["type"] == "result":
                     with self.lock:
@@ -2180,6 +2234,232 @@ def record_limits(agent, info):
     except OSError:
         pass
     emit({"type": "usage", "agent": agent, "usage": USAGE[agent]})
+# ---- token optimizer: a read-only look at Claude Code's own session files --------------------------------
+CLAUDE_SESSIONS = Path.home() / ".claude" / "projects"
+# Cost is counted in input-token equivalents. The price ratios are the same for every Claude model, so no price table is needed.
+W_IN, W_CW5, W_CW1H, W_CR, W_OUT = 1.0, 1.25, 2.0, 0.1, 5.0
+OPT_BIG_RESULT = 10_000    # a tool result above this many tokens counts as oversized
+OPT_KEEP = 4_000           # ...and only what is above this is counted as waste
+OPT_LONG_CTX = 150_000     # turns carrying more history than this are worth compacting
+OPT_COMPACT_TO = 60_000
+OPT_MIN_REWRITE = 20_000   # ignore small cache writes
+_OPT_CACHE = {}
+_OPT_LOCK = threading.Lock()
+_OPT_KEYS = ("turns", "in", "cw5", "cw1h", "cr", "out", "rewrite", "rewrite_n", "long", "long_n", "reread", "reread_n", "big", "big_n")
+
+
+def _opt_result_tokens(content):
+    if isinstance(content, str):
+        return len(content) // 4
+    if isinstance(content, list):
+        return sum(len(b.get("text") or "") for b in content if isinstance(b, dict)) // 4
+    return 0
+
+
+def _opt_analyze_file(path):
+    from datetime import datetime
+    turns, results, tools = {}, [], {}   # message id -> turn; tool results; tool_use id -> (name, file)
+    project = None
+    try:
+        fh = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    with fh:
+        for n, line in enumerate(fh):
+            if '"usage"' not in line and '"tool_result"' not in line:
+                continue
+            try:
+                o = json.loads(line)
+            except ValueError:
+                continue
+            m = o.get("message")
+            ts = o.get("timestamp")
+            if not isinstance(m, dict) or not isinstance(ts, str):
+                continue
+            try:
+                t = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+            project = project or o.get("cwd")
+            content = m.get("content")
+            if o.get("type") == "assistant" and isinstance(m.get("usage"), dict):
+                # one message is written as several lines (one per content block): merge them, keep the final token counts
+                tr = turns.setdefault(m.get("id") or f"line{n}", {"t": t, "chain": (o.get("isSidechain"), o.get("agentId")), "u": m["usage"]})
+                if (m["usage"].get("output_tokens") or 0) >= (tr["u"].get("output_tokens") or 0):
+                    tr["u"] = m["usage"]
+                if isinstance(content, list):
+                    for b in content:
+                        if isinstance(b, dict) and b.get("type") == "tool_use":
+                            inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                            tools[b.get("id")] = (b.get("name"), inp.get("file_path") if b.get("name") == "Read" else None)
+            elif o.get("type") == "user" and isinstance(content, list):
+                for b in content:
+                    if isinstance(b, dict) and b.get("type") == "tool_result":
+                        results.append((t, b.get("tool_use_id"), _opt_result_tokens(b.get("content"))))
+    days, events, last = {}, [], {}
+
+    def day(t):
+        return days.setdefault(time.strftime("%Y-%m-%d", time.localtime(t)), dict.fromkeys(_OPT_KEYS, 0))
+
+    for tr in sorted(turns.values(), key=lambda x: x["t"]):
+        u = tr["u"]
+        inp, cr, cw, out = (u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"))
+        cc = u.get("cache_creation") or {}
+        cw1h, cw5 = cc.get("ephemeral_1h_input_tokens") or 0, cc.get("ephemeral_5m_input_tokens") or 0
+        if not (cw1h or cw5):
+            cw5 = cw   # older files don't say which cache lifetime was used
+        c = day(tr["t"])
+        for k, v in (("turns", 1), ("in", inp), ("cw5", cw5), ("cw1h", cw1h), ("cr", cr), ("out", out)):
+            c[k] += v
+        ctx = inp + cr + cw
+        prev = last.get(tr["chain"])
+        if prev and cw >= OPT_MIN_REWRITE and tr["t"] - prev[0] > prev[2]:
+            # the conversation sat idle past the cache lifetime, so the whole history was written again instead of read
+            c["rewrite"] += min(cw, prev[1]) * ((W_CW1H if cw1h > cw5 else W_CW5) - W_CR)
+            c["rewrite_n"] += 1
+        if ctx > OPT_LONG_CTX:
+            c["long"] += (ctx - OPT_COMPACT_TO) * W_CR
+            c["long_n"] += 1
+        last[tr["chain"]] = (tr["t"], ctx, 3600 if cw1h else 300 if cw5 else (prev[2] if prev else 300))
+    reads = {}
+    for t, uid, toks in sorted(results):
+        name, fp = tools.get(uid, (None, None))
+        c = day(t)
+        if fp:
+            reads[fp] = reads.get(fp, 0) + 1
+            if reads[fp] >= 3:   # a file read for the third time in one session
+                c["reread"] += toks * W_CW5
+                c["reread_n"] += 1
+                events.append((time.strftime("%Y-%m-%d", time.localtime(t)), "reread", fp, toks))
+        if toks > OPT_BIG_RESULT:
+            c["big"] += (toks - OPT_KEEP) * W_CW5
+            c["big_n"] += 1
+            events.append((time.strftime("%Y-%m-%d", time.localtime(t)), "big", name or "tool", toks))
+    return {"project": os.path.basename(project.rstrip("/")) if project else Path(path).parent.name, "days": days, "events": events[:300]}
+
+
+def optimizer_report(days=7):
+    try:
+        days = max(1, min(int(days), 90))
+    except (TypeError, ValueError):
+        days = 7
+    since = time.time() - days * 86400
+    cutoff = time.strftime("%Y-%m-%d", time.localtime(since))
+    files = []
+    for p in CLAUDE_SESSIONS.glob("*/*.jsonl"):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if st.st_mtime >= since:
+            files.append((st.st_mtime, st.st_size, p))
+    files.sort(reverse=True)
+    tot, by_project, rereads, bigs = dict.fromkeys(_OPT_KEYS, 0), {}, {}, {}
+    for mt, size, p in files[:300]:
+        with _OPT_LOCK:
+            hit = _OPT_CACHE.get(str(p))
+        if not hit or hit[0] != (mt, size):
+            hit = ((mt, size), _opt_analyze_file(p))
+            with _OPT_LOCK:
+                if len(_OPT_CACHE) > 1500:
+                    _OPT_CACHE.clear()
+                _OPT_CACHE[str(p)] = hit
+        res = hit[1]
+        if not res:
+            continue
+        proj = by_project.setdefault(res["project"], {"units": 0.0, "turns": 0})
+        for d, c in res["days"].items():
+            if d < cutoff:
+                continue
+            for k in _OPT_KEYS:
+                tot[k] += c[k]
+            proj["units"] += c["in"] * W_IN + c["cw5"] * W_CW5 + c["cw1h"] * W_CW1H + c["cr"] * W_CR + c["out"] * W_OUT
+            proj["turns"] += c["turns"]
+        for d, kind, label, toks in res["events"]:
+            if d < cutoff:
+                continue
+            tbl = rereads if kind == "reread" else bigs
+            e = tbl.setdefault(label, {"n": 0, "tokens": 0})
+            e["n"] += 1
+            e["tokens"] += toks
+    units = tot["in"] * W_IN + tot["cw5"] * W_CW5 + tot["cw1h"] * W_CW1H + tot["cr"] * W_CR + tot["out"] * W_OUT
+    spec = [
+        ("rewrite", "Cache expired before you continued", "{n} times a chat sat idle longer than the prompt cache lasts, so its whole history was paid for again instead of re-read at a tenth of the price.",
+         "Send your next message before the cache runs out (5 minutes, or 1 hour on some plans), or start a fresh chat for a new topic instead of resuming an old one."),
+        ("long", "Conversations got very long", "{n} turns carried more than 150k tokens of history, and every message re-reads all of it.",
+         "Compact (/compact) or start a new chat at around 150k tokens."),
+        ("reread", "The same file read again and again", "{n} reads of a file that had already been read twice in that chat.",
+         "Tell the agent what it already has, or point it at exact line ranges."),
+        ("big", "Oversized tool output", "{n} tool results were bigger than 10k tokens, and all of it stays in the context.",
+         "Ask for narrower commands (grep, head, tail, line ranges) so big outputs don't fill the chat."),
+    ]
+    findings = []
+    for k, title, detail, hint in spec:
+        if tot[k + "_n"] and tot[k] > 0 and units:
+            findings.append({"id": k, "title": title, "detail": detail.format(n=tot[k + "_n"]), "hint": hint,
+                             "count": tot[k + "_n"], "units": round(tot[k]), "pct": round(100 * tot[k] / units, 1)})
+    findings.sort(key=lambda f: f["units"], reverse=True)
+    top = lambda tbl, key: [dict(e, **{key: k}) for k, e in sorted(tbl.items(), key=lambda kv: kv[1]["tokens"], reverse=True)[:5]]
+    log = [e for e in SAVINGS["log"] if e["ts"] >= since]
+    comp, runs = [e for e in log if e["kind"] == "compact"], [e for e in log if e["kind"] == "run"]
+    gross, spent = sum(e.get("usd") or 0 for e in runs), sum(e.get("usd") or 0 for e in comp)
+    saved = {"tokens": sum(e.get("tokens") or 0 for e in runs), "grossUsd": round(gross, 2), "compactions": len(comp),
+             "droppedTokens": sum((e.get("pre") or 0) - (e.get("post") or 0) for e in comp),
+             "costUsd": round(spent, 2), "netUsd": round(gross - spent, 2)}
+    return {"days": days, "sessions": len(files), "turns": tot["turns"], "units": round(units), "saved": saved,
+            "tokens": {"in": tot["in"], "cacheWrite": tot["cw5"] + tot["cw1h"], "cacheRead": tot["cr"], "out": tot["out"]},
+            "findings": findings, "potentialPct": min(100.0, round(sum(f["pct"] for f in findings), 1)),
+            "projects": [{"name": k, "units": round(v["units"]), "turns": v["turns"], "pct": round(100 * v["units"] / units, 1) if units else 0}
+                         for k, v in sorted(by_project.items(), key=lambda kv: kv[1]["units"], reverse=True)[:8] if v["turns"]],
+            "rereads": top(rereads, "file"), "bigOutputs": top(bigs, "tool")}
+
+
+# What compacting long chats really saved, measured from Claude Code's own numbers (see Run.maybe_compact / Run.add_saved)
+SAVINGS_FILE = CONFIG_DIR / "token-savings.json"
+SAVINGS = read_json(SAVINGS_FILE, {"log": []})
+SAVINGS.setdefault("log", [])
+COMPACT_AT = 150_000
+
+
+def unit_usd(ev):
+    """What one input-token equivalent really cost in a finished run: its dollars over its weighted tokens. No price table needed."""
+    units = sum((m.get("inputTokens") or 0) * W_IN + (m.get("cacheCreationEphemeral5mInputTokens") or 0) * W_CW5
+                + (m.get("cacheCreationEphemeral1hInputTokens") or 0) * W_CW1H + (m.get("cacheReadInputTokens") or 0) * W_CR
+                + (m.get("outputTokens") or 0) * W_OUT for m in (ev.get("modelUsage") or {}).values() if isinstance(m, dict))
+    cost = ev.get("total_cost_usd")
+    return cost / units if cost and units else None
+
+
+def record_saving(kind, **kw):
+    with _OPT_LOCK:
+        SAVINGS["log"].append(dict(kw, kind=kind, ts=time.time()))
+        del SAVINGS["log"][:-5000]
+        try:
+            write_json(SAVINGS_FILE, SAVINGS)
+        except OSError:
+            pass
+
+
+def compact_sizes(session_id):
+    """Tokens before and after the latest compaction, as Claude Code recorded them in the session file."""
+    for f in CLAUDE_SESSIONS.glob(f"*/{session_id}.jsonl"):
+        try:
+            with open(f, "rb") as fh:
+                fh.seek(0, 2)
+                fh.seek(max(0, fh.tell() - 600_000))
+                tail = fh.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        for line in reversed(tail.splitlines()):
+            if '"compact_boundary"' in line:
+                try:
+                    md = json.loads(line).get("compactMetadata") or {}
+                except ValueError:
+                    continue
+                return md.get("preTokens"), md.get("postTokens")
+    return None, None
+
+
 SERVER_FILE = Path(__file__).resolve()
 SERVER_MTIME = SERVER_FILE.stat().st_mtime  # an update replaces this file; the running server then knows it's stale
 
@@ -5675,6 +5955,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.local_proxy(u, "GET")
             if u.path == "/api/sysinfo":
                 return self._send(200, sysinfo())
+            if u.path == "/api/optimizer":  # reads this computer's Claude session files: not for guests
+                if is_guest(prof):
+                    return self._send(403, {"error": "not available to guests"})
+                return self._send(200, optimizer_report(qs.get("days", ["7"])[0]))
             if u.path == "/api/notices":
                 since = float(qs.get("since", ["0"])[0] or 0)
                 items = [dict(n) for n in NOTICES if n["ts"] > since and (not n.get("profile") or n["profile"] == prof.pid)
@@ -6061,7 +6345,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         if path == "/api/prefs":
             prof.data["settings"].update({k: v for k, v in b.items() if k in ("theme", "accent", "density", "mode", "agent", "notify", "sound", "usage",
-                                                                                 "nApproval", "nDone", "nBuild", "nCrash")})
+                                                                                 "nApproval", "nDone", "nBuild", "nCrash", "autoCompact", "compactAt")})
             prof.save()
             return prof.data["settings"]
         if path == "/api/agents/save":

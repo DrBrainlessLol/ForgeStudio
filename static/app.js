@@ -430,6 +430,9 @@ function applyEvent(items, ev) {
       if (S.prefs?.usage !== false) {
         if (ev.tokens) bits.push(fmtTokens(ev.tokens) + " tokens" + (ev.tok?.cached ? ` (${fmtTokens(ev.tok.cached)} cached)` : ""));
         if (ev.cost) bits.push("$" + ev.cost.toFixed(3));
+        const sv = ev.saved;
+        if (sv?.tokens) bits.push(`saved ${fmtTokens(sv.tokens)} tokens${sv.usd != null ? " ≈ $" + sv.usd.toFixed(2) : ""}${sv.cost ? ` (compacting cost $${sv.cost.toFixed(2)})` : ""}`);
+        else if (sv?.cost) bits.push(`compacting cost $${sv.cost.toFixed(2)}`);
       }
       push({ k: "meta", text: (ev.error ? "Stopped with an error" : "Done") + (bits.length ? " · " + bits.join(" · ") : "") });
       if (ev.denials?.length) {
@@ -1423,6 +1426,7 @@ function openSettings(sec = "general") {
   showSection(sec);
   if (sec === "setup" || !S.setup) act(loadSetup)();
   if (sec === "team") act(() => renderTeamSettings($("#teamSettingsSec")))();
+  if (sec === "tokens") act(loadTokenUsage)();
   $("#swatches").innerHTML = ACCENTS.map(([n, c]) => `<button class="swatch" title="${n}" data-accent="${c}" style="background:${c}"></button>`).join("");
   $$("#swatches .swatch").forEach((b) => (b.onclick = () => setPref({ accent: b.dataset.accent })));
   applyAppearance(S.prefs);
@@ -1442,7 +1446,45 @@ function showSection(sec) {
   $$("#settingsNav button").forEach((b) => b.classList.toggle("active", b.dataset.sec === sec));
   $$(".settings-body section").forEach((s) => (s.hidden = s.dataset.sec !== sec));
 }
-$$("#settingsNav button").forEach((b) => (b.onclick = () => { showSection(b.dataset.sec); if (b.dataset.sec === "team") act(() => renderTeamSettings($("#teamSettingsSec")))(); }));
+$$("#settingsNav button").forEach((b) => (b.onclick = () => { showSection(b.dataset.sec); if (b.dataset.sec === "team") act(() => renderTeamSettings($("#teamSettingsSec")))(); if (b.dataset.sec === "tokens") act(loadTokenUsage)(); }));
+// ---- token usage: where Claude Code's tokens go, from its own session files
+let tokDays = 7;
+const tokFmt = (n) => (n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n));
+async function loadTokenUsage() {
+  $$("#tokDays button").forEach((b) => b.classList.toggle("active", +b.dataset.days === tokDays));
+  $("#tokBody").innerHTML = `<p class="dim">Reading sessions…</p>`;
+  $("#setAutoCompact").checked = S.prefs.autoCompact !== false;
+  $("#setCompactAt").value = String(S.prefs.compactAt || 150000);
+  const r = await api(`/api/optimizer?days=${tokDays}`);
+  const sv = r.saved;
+  $("#tokSaved").innerHTML = sv.compactions || sv.tokens ? `<div class="form-group">
+      <div class="form-row"><span>Saved by compacting</span><span class="mono">${tokFmt(sv.tokens)} tokens not re-read · about $${sv.grossUsd.toFixed(2)}</span></div>
+      <div class="form-row"><span>Spent compacting (${sv.compactions}×, dropped ${tokFmt(sv.droppedTokens)} tokens)</span><span class="mono">$${sv.costUsd.toFixed(2)}</span></div>
+      <div class="form-row"><b>Net saved</b><b class="mono">$${sv.netUsd.toFixed(2)}</b></div>
+    </div><p class="dim small-text">Measured from what Claude Code reported for each compaction and each reply since. The saving counts the history that wasn't re-read on every turn, priced at what your own replies actually cost.</p>`
+    : `<p class="dim small-text">Nothing saved yet: no chat has been compacted. Savings show here, and on each reply's "Done" line, once one is.</p>`;
+  const t = r.tokens;
+  const pct = (n) => (r.units ? Math.round((100 * n) / r.units) : 0);
+  const fin = r.findings.map((f) => `<div class="form-group"><div class="form-row"><b>${esc(f.title)}</b><span class="mono">${f.pct}% of usage · ${tokFmt(f.units)}</span></div>
+    <p class="dim small-text">${esc(f.detail)}</p><p class="small-text">${esc(f.hint)}</p></div>`).join("");
+  const list = (items, key) => items.map((x) => `<div class="form-row"><span class="mono dim" title="${esc(x[key])}">${esc(key === "file" ? x[key].split("/").slice(-2).join("/") : x[key])}</span><span class="mono">${x.n}× · ${tokFmt(x.tokens)} tokens</span></div>`).join("");
+  $("#tokBody").innerHTML = r.turns ? `
+    <div class="form-group">
+      <div class="form-row"><span>Turns</span><span class="mono">${r.turns.toLocaleString()} in ${r.sessions} sessions</span></div>
+      <div class="form-row"><span>Re-read from cache</span><span class="mono">${tokFmt(t.cacheRead)} tokens · ${pct(t.cacheRead * 0.1)}% of cost</span></div>
+      <div class="form-row"><span>Written to cache</span><span class="mono">${tokFmt(t.cacheWrite)} tokens</span></div>
+      <div class="form-row"><span>Output</span><span class="mono">${tokFmt(t.out)} tokens · ${pct(t.out * 5)}% of cost</span></div>
+    </div>
+    <h4>What would save the most${r.findings.length ? ` <span class="dim">(up to about ${Math.round(r.potentialPct)}%; fixes overlap, so don't add them up)</span>` : ""}</h4>
+    ${fin || `<p class="dim">Nothing wasteful stands out.</p>`}
+    <h4>By project</h4><div class="form-group">${r.projects.map((p) => `<div class="form-row"><span>${esc(p.name)}</span><span class="mono">${p.pct}% · ${p.turns.toLocaleString()} turns</span></div>`).join("")}</div>
+    ${r.rereads.length ? `<h4>Files read again and again</h4><div class="form-group">${list(r.rereads, "file")}</div>` : ""}
+    ${r.bigOutputs.length ? `<h4>Biggest tool outputs</h4><div class="form-group">${list(r.bigOutputs, "tool")}</div>` : ""}`
+    : `<p class="dim">No Claude Code activity in this period.</p>`;
+}
+$$("#tokDays button").forEach((b) => (b.onclick = () => { tokDays = +b.dataset.days; act(loadTokenUsage)(); }));
+$("#setAutoCompact").onchange = () => setPref({ autoCompact: $("#setAutoCompact").checked });
+$("#setCompactAt").onchange = () => setPref({ compactAt: +$("#setCompactAt").value });
 $("#setClose").onclick = () => $("#dlgSettings").close();
 $("#btnSettings").onclick = () => openSettings("general");
 $("#btnProfile").onclick = () => openSettings("profile");
