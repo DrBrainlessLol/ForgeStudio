@@ -2914,7 +2914,7 @@ function applyWidths() {
 $("#btnProj").onclick = (e) => {
   e.stopPropagation();
   const r = $("#btnProj").getBoundingClientRect();
-  const items = S.projects.slice(0, 14).map((p) => ({
+  const items = S.projects.map((p) => ({
     label: p.name + (p.path === S.cur ? "  ✓" : ""), icon: p.flutter ? "zap" : p.android ? "phone" : p.web?.length ? "globe" : "folder",
     fn: act(() => selectProject(p.path)),
   }));
